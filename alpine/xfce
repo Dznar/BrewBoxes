@@ -1,0 +1,9 @@
+FROM lscr.io/linuxserver/webtop:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PUID=1000
+ENV PGID=1000
+ENV TZ=Etc/UTC
+
+#COPY icon.png /usr/share/selkies/www/icon.png
+ENTRYPOINT ["/init"]

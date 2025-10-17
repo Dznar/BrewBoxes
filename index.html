@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BrewBoxes - Try Linux Distributions Online</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ubuntu: '#E95420',
+                        fedora: '#294172',
+                        debian: '#D70A53',
+                        arch: '#1793D1',
+                        alpine: '#0D597F',
+                        enterprise: '#EE0000'
+                    },
+                    animation: {
+                        'slide-up': 'slideUp 0.3s ease-out',
+                        'pulse-slow': 'pulse 3s infinite',
+                    },
+                    keyframes: {
+                        slideUp: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        }
+                    }
+                },
+            },
+        }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .font-inter {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Custom animations */
+        @keyframes slideUp {
+            0% {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-slide-up {
+            animation: slideUp 0.3s ease-out;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+
+        /* Enhanced card effects */
+        .distro-card {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .distro-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .distro-card:hover::before {
+            left: 100%;
+        }
+
+        /* GUI button selection effect */
+        .gui-btn.selected {
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid #3b82f6;
+            color: #60a5fa;
+        }
+
+        /* Launch button states */
+        .launch-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .launch-btn.launching {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .launch-btn.launching::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+            animation: shimmer 1.5s infinite;
+        }
+
+        @keyframes shimmer {
+            0% {
+                left: -100%;
+            }
+            100% {
+                left: 100%;
+            }
+        }
+
+        /* Status indicators */
+        .status-connecting {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid #3b82f6;
+            color: #60a5fa;
+        }
+
+        .status-success {
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid #22c55e;
+            color: #4ade80;
+        }
+
+        .status-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid #ef4444;
+            color: #f87171;
+        }
+
+        /* Ripple effect */
+        button {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(0);
+            animation: ripple-animation 0.6s linear;
+            pointer-events: none;
+        }
+        
+        @keyframes ripple-animation {
+            to {
+                transform: scale(4);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white min-h-screen font-inter">
+    <!-- Header -->
+    <header class="container mx-auto px-4 py-8">
+        <div class="text-center  ">
+            <h1 class="text-5xl font-bold bg-gradient-to-r from-blue-400 via-purple-500 to-pink-500 bg-clip-text text-transparent mb-4">
+                BrewBoxes
+            </h1>
+            <p class="text-xl text-gray-300 max-w-2xl mx-auto leading-relaxed">
+                Experience the power of Linux distributions directly in your browser. 
+                Choose your favorite distro and desktop environment to get started instantly.
+            </p>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 pb-12">
+        <!-- Connection Status -->
+        <div id="connectionStatus" class="hidden mb-8 p-4 rounded-lg text-center font-medium">
+            <span id="statusText"></span>
+        </div>
+
+        <!-- Distros Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <!-- Ubuntu -->
+            <div class="distro-card bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 hover:border-ubuntu transition-all duration-300 hover:scale-105  " 
+                 data-distro="ubuntu" 
+                 style="animation-delay: 0.1s">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-ubuntu rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-white font-bold text-lg">U</span>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold">Ubuntu</h3>
+                        <p class="text-gray-400 text-sm">World's most popular Linux desktop</p>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <h4 class="font-medium text-gray-300">Available Desktop Environments:</h4>
+                    <div class="gui-options space-y-2">
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-ubuntu hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="i3">
+                            <span class="font-medium">i3</span>
+                            <span class="text-gray-400 text-sm block">Tiling window manager</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-ubuntu hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="kde">
+                            <span class="font-medium">KDE Plasma</span>
+                            <span class="text-gray-400 text-sm block">Modern and customizable</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-ubuntu hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="mate">
+                            <span class="font-medium">MATE</span>
+                            <span class="text-gray-400 text-sm block">Traditional desktop</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-ubuntu hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="xfce">
+                            <span class="font-medium">XFCE</span>
+                            <span class="text-gray-400 text-sm block">Lightweight and fast</span>
+                        </button>
+                    </div>
+                    <button class="launch-btn w-full mt-4 bg-ubuntu hover:bg-orange-600 text-white font-medium py-3 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Select GUI First
+                    </button>
+                </div>
+            </div>
+
+            <!-- Fedora -->
+            <div class="distro-card bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 hover:border-fedora transition-all duration-300 hover:scale-105  " 
+                 data-distro="fedora" 
+                 style="animation-delay: 0.2s">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-fedora rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-white font-bold text-lg">F</span>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold">Fedora</h3>
+                        <p class="text-gray-400 text-sm">Innovation first, cutting-edge</p>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <h4 class="font-medium text-gray-300">Available Desktop Environments:</h4>
+                    <div class="gui-options space-y-2">
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-fedora hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="i3">
+                            <span class="font-medium">i3</span>
+                            <span class="text-gray-400 text-sm block">Tiling window manager</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-fedora hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="kde">
+                            <span class="font-medium">KDE Plasma</span>
+                            <span class="text-gray-400 text-sm block">Modern and customizable</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-fedora hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="mate">
+                            <span class="font-medium">MATE</span>
+                            <span class="text-gray-400 text-sm block">Traditional desktop</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-fedora hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="xfce">
+                            <span class="font-medium">XFCE</span>
+                            <span class="text-gray-400 text-sm block">Lightweight and fast</span>
+                        </button>
+                    </div>
+                    <button class="launch-btn w-full mt-4 bg-fedora hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Select GUI First
+                    </button>
+                </div>
+            </div>
+
+            <!-- Debian -->
+            <div class="distro-card bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 hover:border-debian transition-all duration-300 hover:scale-105  " 
+                 data-distro="debian" 
+                 style="animation-delay: 0.3s">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-debian rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-white font-bold text-lg">D</span>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold">Debian</h3>
+                        <p class="text-gray-400 text-sm">The universal operating system</p>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <h4 class="font-medium text-gray-300">Available Desktop Environments:</h4>
+                    <div class="gui-options space-y-2">
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-debian hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="i3">
+                            <span class="font-medium">i3</span>
+                            <span class="text-gray-400 text-sm block">Tiling window manager</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-debian hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="kde">
+                            <span class="font-medium">KDE Plasma</span>
+                            <span class="text-gray-400 text-sm block">Modern and customizable</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-debian hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="mate">
+                            <span class="font-medium">MATE</span>
+                            <span class="text-gray-400 text-sm block">Traditional desktop</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-debian hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="xfce">
+                            <span class="font-medium">XFCE</span>
+                            <span class="text-gray-400 text-sm block">Lightweight and fast</span>
+                        </button>
+                    </div>
+                    <button class="launch-btn w-full mt-4 bg-debian hover:bg-pink-700 text-white font-medium py-3 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Select GUI First
+                    </button>
+                </div>
+            </div>
+
+            <!-- Arch Linux -->
+            <div class="distro-card bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 hover:border-arch transition-all duration-300 hover:scale-105  " 
+                 data-distro="arch" 
+                 style="animation-delay: 0.4s">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-arch rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-white font-bold text-lg">A</span>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold">Arch Linux</h3>
+                        <p class="text-gray-400 text-sm">Rolling release, advanced users</p>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <h4 class="font-medium text-gray-300">Available Desktop Environments:</h4>
+                    <div class="gui-options space-y-2">
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-arch hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="i3">
+                            <span class="font-medium">i3</span>
+                            <span class="text-gray-400 text-sm block">Tiling window manager</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-arch hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="kde">
+                            <span class="font-medium">KDE Plasma</span>
+                            <span class="text-gray-400 text-sm block">Modern and customizable</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-arch hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="mate">
+                            <span class="font-medium">MATE</span>
+                            <span class="text-gray-400 text-sm block">Traditional desktop</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-arch hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="xfce">
+                            <span class="font-medium">XFCE</span>
+                            <span class="text-gray-400 text-sm block">Lightweight and fast</span>
+                        </button>
+                    </div>
+                    <button class="launch-btn w-full mt-4 bg-arch hover:bg-blue-600 text-white font-medium py-3 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Select GUI First
+                    </button>
+                </div>
+            </div>
+
+            <!-- Alpine Linux -->
+            <div class="distro-card bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 hover:border-alpine transition-all duration-300 hover:scale-105  " 
+                 data-distro="alpine" 
+                 style="animation-delay: 0.5s">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-alpine rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-white font-bold text-lg">A</span>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold">Alpine Linux</h3>
+                        <p class="text-gray-400 text-sm">Security-focused, lightweight</p>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <h4 class="font-medium text-gray-300">Available Desktop Environments:</h4>
+                    <div class="gui-options space-y-2">
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-alpine hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="i3">
+                            <span class="font-medium">i3</span>
+                            <span class="text-gray-400 text-sm block">Tiling window manager</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-alpine hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="mate">
+                            <span class="font-medium">MATE</span>
+                            <span class="text-gray-400 text-sm block">Traditional desktop</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-alpine hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="xfce">
+                            <span class="font-medium">XFCE</span>
+                            <span class="text-gray-400 text-sm block">Lightweight and fast</span>
+                        </button>
+                    </div>
+                    <button class="launch-btn w-full mt-4 bg-alpine hover:bg-blue-700 text-white font-medium py-3 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Select GUI First
+                    </button>
+                </div>
+            </div>
+
+            <!-- Enterprise Linux -->
+            <div class="distro-card bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 border border-gray-700 hover:border-enterprise transition-all duration-300 hover:scale-105  " 
+                 data-distro="enterprise" 
+                 style="animation-delay: 0.6s">
+                <div class="flex items-center mb-4">
+                    <div class="w-12 h-12 bg-enterprise rounded-xl flex items-center justify-center mr-4">
+                        <span class="text-white font-bold text-lg">E</span>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-semibold">Enterprise Linux</h3>
+                        <p class="text-gray-400 text-sm">Enterprise-grade (RHEL-based)</p>
+                    </div>
+                </div>
+                <div class="space-y-3">
+                    <h4 class="font-medium text-gray-300">Available Desktop Environments:</h4>
+                    <div class="gui-options space-y-2">
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-enterprise hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="i3">
+                            <span class="font-medium">i3</span>
+                            <span class="text-gray-400 text-sm block">Tiling window manager</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-enterprise hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="mate">
+                            <span class="font-medium">MATE</span>
+                            <span class="text-gray-400 text-sm block">Traditional desktop</span>
+                        </button>
+                        <button class="gui-btn w-full text-left p-3 rounded-lg bg-gray-700 hover:bg-enterprise hover:bg-opacity-20 transition-colors duration-200" 
+                                data-gui="xfce">
+                            <span class="font-medium">XFCE</span>
+                            <span class="text-gray-400 text-sm block">Lightweight and fast</span>
+                        </button>
+                    </div>
+                    <button class="launch-btn w-full mt-4 bg-enterprise hover:bg-red-700 text-white font-medium py-3 px-6 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                        Select GUI First
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="text-center py-8 text-gray-400">
+        <p>&copy; 2025 BrewBoxes. Experience Linux distributions in your browser.</p>
+    </footer>
+
+    <script src="./main.js"></script>
+</body>
+</html>
