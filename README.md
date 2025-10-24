@@ -1,24 +1,131 @@
-BrewBoxes is a container based Browser Compatible Linux,
-It has pre-built Linux GUI accessible with a simple one click and run.
+# BrewBoxes - Linux Container Launcher
 
-Optional Environment Variables¶
-Variable 				Description
-CUSTOM_PORT 			Internal HTTP port. Defaults to 3000.
-CUSTOM_HTTPS_PORT 	Internal HTTPS port. Defaults to 3001.
-CUSTOM_WS_PORT 		Internal port the container listens on for websockets if it needs to be swapped from the default 8082.
-CUSTOM_USER 			Username for HTTP Basic Auth. Defaults to abc.
-PASSWORD 			Password for HTTP Basic Auth. If unset, authentication is disabled.
-SUBFOLDER 			Application subfolder for reverse proxy configurations. Must include leading and trailing slashes, e.g., /subfolder/.
-TITLE 				Page title displayed in the web browser. Defaults to "Selkies".
-START_DOCKER 		If set to false, the privileged Docker-in-Docker setup will not start automatically.
-DISABLE_IPV6 			Set to true to disable IPv6 support in the container.
-LC_ALL 				Sets the container's locale, e.g., fr_FR.UTF-8.
-DRINODE 				If mounting in /dev/dri for DRI3 GPU Acceleration allows you to specify the device to use IE /dev/dri/renderD128
-NO_DECOR 			If set, applications will run without window borders, suitable for PWA usage.
-NO_FULL 				If set, applications will not be automatically fullscreened.
-DISABLE_ZINK 			If set, Zink-related environment variables will not be configured when a video card is detected.
-WATERMARK_PNG 		Full path to a watermark PNG file inside the container, e.g., /usr/share/selkies/www/icon.png.
-WATERMARK_LOCATION 	Integer specifying the watermark location: 1 (Top Left), 2 (Top Right), 3 (Bottom Left), 4 (Bottom Right), 5 (Centered), 6 (Animated).
+A web application similar to Distrosea that allows users to dynamically launch Linux distribution containers with different desktop environments.
 
+## Features
 
-Future Features, we plan to add a Tunnel system into and between containers for acrosss devices communication and utilize 'Containerlab' for communication between containers and each other or host system.
+- Launch multiple Linux distributions (Ubuntu, Fedora, Debian, Arch, Alpine, openSUSE)
+- Choose from various desktop environments (i3, KDE, MATE, XFCE)
+- Dynamic port assignment to avoid conflicts
+- Real-time status logging
+- Container tracking (temporarily disabled)
+- Local API route for container management using direct `child_process.exec` calls
+- Automatic detection of Docker or Podman engine
+- Dynamic Dockerfile generation for each distro/GUI combination
+- Support for up to 24 simultaneous containers
+
+## Architecture
+
+### Frontend
+- React + TypeScript + Vite
+- Tailwind CSS for styling
+- Responsive design with modern UI
+
+### Backend
+- Supabase Edge Function (Deno runtime)
+- Podman for container management
+- PostgreSQL database for tracking containers and port assignments
+
+## Prerequisites
+
+- Podman installed and running
+- Node.js (v18 or higher)
+- Supabase account (already configured)
+
+## Installation
+
+1. Install dependencies:
+```bash
+npm install
+```
+
+2. Make sure Podman is installed and running:
+```bash
+podman --version
+podman ps
+```
+
+## Usage
+
+1. Start the development server:
+```bash
+npm run dev
+```
+
+2. Open your browser and navigate to `http://localhost:5173`
+
+3. Select a Linux distribution and desktop environment
+
+4. Click "Launch" to start a container
+
+5. The container will open in a new tab once ready (may take 30-60 seconds for first launch)
+
+## How It Works
+
+1. **Port Management**: The system automatically finds available ports starting from 3002 (frontend) and 6901 (WebSocket)
+
+2. **Container Launch**: When you launch a distro, the backend:
+   - Checks for available ports in the database
+   - Creates a container record
+   - Runs the Podman command with dynamic port assignment
+   - Returns the access URL
+
+3. **Container Tracking**: All containers are tracked in the Supabase database with:
+   - Container name and ID
+   - Distribution and GUI selection
+   - Assigned ports
+   - Status and timestamps
+
+4. **Cleanup**: Old containers (inactive for 1+ hour) can be cleaned up via the `/cleanup` endpoint
+
+## API Endpoints
+
+The backend edge function provides these endpoints:
+
+- `POST /functions/v1/container-manager/launch` - Launch a new container
+- `GET /functions/v1/container-manager/containers` - List all containers
+- `POST /functions/v1/container-manager/cleanup` - Clean up old containers
+
+## Database Schema
+
+### containers table
+- `id`: Unique identifier
+- `container_name`: Name of the container
+- `distro`: Linux distribution
+- `gui`: Desktop environment
+- `front_port`: Frontend port
+- `ws_port`: WebSocket port
+- `status`: Current status
+- `created_at`: Creation timestamp
+- `container_id`: Podman container ID
+
+### port_assignments table
+- `id`: Unique identifier
+- `port`: Port number
+- `port_type`: frontend or websocket
+- `in_use`: Boolean flag
+- `container_id`: Reference to container
+- `assigned_at`: Assignment timestamp
+
+## Container Images
+
+Uses LinuxServer.io webtop images:
+- `lscr.io/linuxserver/webtop:ubuntu-{gui}`
+- `lscr.io/linuxserver/webtop:fedora-{gui}`
+- `lscr.io/linuxserver/webtop:debian-{gui}`
+- `lscr.io/linuxserver/webtop:arch-{gui}`
+- `lscr.io/linuxserver/webtop:alpine-{gui}`
+- `lscr.io/linuxserver/webtop:opensuse-{gui}`
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+## Notes
+
+- First launch of each distro/GUI combination will take longer as Podman pulls the image
+- Containers persist until manually stopped or cleaned up
+- Maximum of 24 containers can run simultaneously (configurable)
+- Each container gets unique ports to avoid conflicts
