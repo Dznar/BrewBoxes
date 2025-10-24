@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { RunningContainer } from '../App';
 
 
 interface GUI {
@@ -27,6 +28,9 @@ interface DistroCardProps {
     type: 'success' | 'error' | 'connecting' | 'info'
   ) => void;
   animationDelay: number;
+  runningContainers: RunningContainer[];
+  addRunningContainer: (container: RunningContainer) => void;
+  removeRunningContainer: (containerId: string) => void;
 }
 
 function DistroCard({
@@ -37,8 +41,13 @@ function DistroCard({
   clearStatusMessages,
   updateConnectionStatus,
   animationDelay,
+  runningContainers,
+  addRunningContainer,
+  removeRunningContainer,
 }: DistroCardProps) {
   const [isLaunching, setIsLaunching] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleLaunch = async () => {
     if (!selectedGui) {
@@ -74,6 +83,12 @@ function DistroCard({
       }
 
       if (data.success) {
+        addRunningContainer({
+          id: data.container_id,
+          distroId: distro.id,
+          guiId: selectedGui,
+          url: data.url,
+        });
         updateConnectionStatus(data.message, 'success');
         addStatusMessage(`[SUCCESS] Container accessible at: ${data.url}`);
         addStatusMessage('[INFO] Opening in new tab...');
@@ -94,11 +109,78 @@ function DistroCard({
     }
   };
 
+  const handleStop = async (containerId: string) => {
+    setIsStopping(true);
+    updateConnectionStatus('Stopping container...', 'connecting');
+
+    try {
+      const response = await fetch('/api/stop', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ containerId }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        updateConnectionStatus('Container stopped successfully', 'success');
+        addStatusMessage(`[SUCCESS] Container ${containerId.slice(0, 12)} stopped`);
+      } else {
+        updateConnectionStatus(`Stop failed: ${data.message}`, 'error');
+        addStatusMessage(`[ERROR] ${data.message}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      updateConnectionStatus(`Error: ${errorMessage}`, 'error');
+      addStatusMessage(`[ERROR] ${errorMessage}`);
+    } finally {
+      setIsStopping(false);
+    }
+  };
+
+  const handleDelete = async (containerId: string) => {
+    setIsDeleting(true);
+    updateConnectionStatus('Deleting container...', 'connecting');
+
+    try {
+      const response = await fetch('/api/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ containerId }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        removeRunningContainer(containerId);
+        updateConnectionStatus('Container deleted successfully', 'success');
+        addStatusMessage(`[SUCCESS] Container ${containerId.slice(0, 12)} deleted`);
+      } else {
+        updateConnectionStatus(`Delete failed: ${data.message}`, 'error');
+        addStatusMessage(`[ERROR] ${data.message}`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      updateConnectionStatus(`Error: ${errorMessage}`, 'error');
+      addStatusMessage(`[ERROR] ${errorMessage}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const getButtonText = () => {
     if (isLaunching) return 'Launching...';
     if (selectedGui) return `Launch ${distro.name} with ${selectedGui.toUpperCase()}`;
     return 'Select GUI First';
   };
+
+  const runningContainer = runningContainers.find(
+    (c) => c.distroId === distro.id && c.guiId === selectedGui
+  );
 
   return (
     <div
@@ -138,13 +220,43 @@ function DistroCard({
 
         <button
           onClick={handleLaunch}
-          disabled={!selectedGui || isLaunching}
+          disabled={!selectedGui || isLaunching || !!runningContainer}
           className={`w-full mt-4 ${distro.color} hover:opacity-90 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
             isLaunching ? 'animate-pulse' : ''
           }`}
         >
           {getButtonText()}
         </button>
+
+        {runningContainer && (
+          <div className="mt-4 space-y-2 p-3 bg-gray-700 rounded-lg">
+            <div className="text-sm text-gray-300">
+              <span className="font-medium">Running:</span> {runningContainer.id.slice(0, 12)}
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => window.open(runningContainer.url, '_blank')}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200"
+              >
+                Open
+              </button>
+              <button
+                onClick={() => handleStop(runningContainer.id)}
+                disabled={isStopping || isDeleting}
+                className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isStopping ? 'Stopping...' : 'Stop'}
+              </button>
+              <button
+                onClick={() => handleDelete(runningContainer.id)}
+                disabled={isStopping || isDeleting}
+                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

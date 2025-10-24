@@ -5,8 +5,16 @@ import DistroGrid from './components/DistroGrid';
 import Footer from './components/Footer';
 import ConnectionStatus from './components/ConnectionStatus';
 
+export interface RunningContainer {
+  id: string;
+  distroId: string;
+  guiId: string;
+  url: string;
+}
+
 function App() {
   const [statusMessages, setStatusMessages] = useState<string[]>([]);
+  const [runningContainers, setRunningContainers] = useState<RunningContainer[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<{
     message: string;
     type: 'success' | 'error' | 'connecting' | 'info';
@@ -38,6 +46,14 @@ function App() {
     }
   };
 
+  const addRunningContainer = (container: RunningContainer) => {
+    setRunningContainers((prev) => [...prev, container]);
+  };
+
+  const removeRunningContainer = (containerId: string) => {
+    setRunningContainers((prev) => prev.filter((c) => c.id !== containerId));
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white font-inter">
       <Header />
@@ -55,6 +71,9 @@ function App() {
           addStatusMessage={addStatusMessage}
           clearStatusMessages={clearStatusMessages}
           updateConnectionStatus={updateConnectionStatus}
+          runningContainers={runningContainers}
+          addRunningContainer={addRunningContainer}
+          removeRunningContainer={removeRunningContainer}
         />
       </main>
 

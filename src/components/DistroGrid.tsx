@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import DistroCard from './DistroCard';
+import { RunningContainer } from '../App';
 
 interface DistroGridProps {
   addStatusMessage: (message: string) => void;
@@ -8,6 +9,9 @@ interface DistroGridProps {
     message: string,
     type: 'success' | 'error' | 'connecting' | 'info'
   ) => void;
+  runningContainers: RunningContainer[];
+  addRunningContainer: (container: RunningContainer) => void;
+  removeRunningContainer: (containerId: string) => void;
 }
 
 interface DistroConfig {
@@ -106,6 +110,9 @@ function DistroGrid({
   addStatusMessage,
   clearStatusMessages,
   updateConnectionStatus,
+  runningContainers,
+  addRunningContainer,
+  removeRunningContainer,
 }: DistroGridProps) {
   const [selectedGuis, setSelectedGuis] = useState<Record<string, string>>({});
 
@@ -128,6 +135,9 @@ function DistroGrid({
           clearStatusMessages={clearStatusMessages}
           updateConnectionStatus={updateConnectionStatus}
           animationDelay={index * 100}
+          runningContainers={runningContainers}
+          addRunningContainer={addRunningContainer}
+          removeRunningContainer={removeRunningContainer}
         />
       ))}
     </div>

@@ -1,6 +1,8 @@
 import http from 'http';
 import { parse } from 'url';
 import launchHandler from './src/pages/api/launch';
+import stopHandler from './src/pages/api/stop';
+import deleteHandler from './src/pages/api/delete';
 
 const PORT = 3001;
 
@@ -23,14 +25,24 @@ const server = http.createServer(async (req, res) => {
     this.end(JSON.stringify(data));
   };
 
-  if (pathname === '/launch' && req.method === 'POST') {
+  if (req.method === 'POST') {
     let body = '';
     req.on('data', chunk => {
       body += chunk.toString();
     });
     req.on('end', async () => {
       req.body = JSON.parse(body);
-      await launchHandler(req, expressRes);
+
+      if (pathname === '/launch') {
+        await launchHandler(req, expressRes);
+      } else if (pathname === '/stop') {
+        await stopHandler(req, expressRes);
+      } else if (pathname === '/delete') {
+        await deleteHandler(req, expressRes);
+      } else {
+        res.statusCode = 404;
+        res.end('Not Found');
+      }
     });
   } else {
     res.statusCode = 404;
