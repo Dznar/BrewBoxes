@@ -89,11 +89,11 @@ const distros: DistroConfig[] = [
     guis: [
       { id: 'i3', name: 'i3', description: 'Tiling window manager' },
       { id: 'mate', name: 'MATE', description: 'Traditional desktop' },
-      { id: 'xfce', name: 'XFCE', description: 'Lightweight and fast' },
+      { id: 'latest', name: 'XFCE', description: 'Lightweight and fast' },
     ],
   },
   {
-    id: 'opensuse',
+    id: 'el',
     name: 'openSUSE',
     description: 'Enterprise-grade stability',
     color: 'bg-green-700',

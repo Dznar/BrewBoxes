@@ -48,6 +48,7 @@ function DistroCard({
   const [isLaunching, setIsLaunching] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<string>('');
 
   const handleLaunch = async () => {
     if (!selectedGui) {
@@ -56,6 +57,7 @@ function DistroCard({
     }
 
     setIsLaunching(true);
+    setDownloadProgress('');
     clearStatusMessages();
     updateConnectionStatus(
       `Launching ${distro.name} with ${selectedGui.toUpperCase()}...`,
@@ -74,31 +76,50 @@ function DistroCard({
         }),
       });
 
-      const data = await response.json();
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
 
-      if (data.status_updates) {
-        data.status_updates.forEach((update: string) => {
-          addStatusMessage(update);
-        });
+      if (!reader) {
+        throw new Error('Failed to get response reader');
       }
 
-      if (data.success) {
-        addRunningContainer({
-          id: data.container_id,
-          distroId: distro.id,
-          guiId: selectedGui,
-          url: data.url,
-        });
-        updateConnectionStatus(data.message, 'success');
-        addStatusMessage(`[SUCCESS] Container accessible at: ${data.url}`);
-        addStatusMessage('[INFO] Opening in new tab...');
+      let result;
+      while (!(result = await reader.read()).done) {
+        const chunk = decoder.decode(result.value, { stream: true });
+        const lines = chunk.split('\n');
 
-        setTimeout(() => {
-          window.open(data.url, '_blank');
-        }, 1000);
-      } else {
-        updateConnectionStatus(`Launch failed: ${data.message}`, 'error');
-        addStatusMessage(`[ERROR] ${data.message}`);
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === 'status') {
+              addStatusMessage(`[INFO] ${data.message}`);
+              setDownloadProgress(data.message);
+            } else if (data.type === 'progress') {
+              if (data.percent) {
+                setDownloadProgress(`Downloading: ${data.percent}`);
+              }
+              addStatusMessage(`[PROGRESS] ${data.message}`);
+            } else if (data.type === 'complete') {
+              addRunningContainer({
+                id: data.container_id,
+                distroId: distro.id,
+                guiId: selectedGui,
+                url: data.url,
+              });
+              updateConnectionStatus(data.message, 'success');
+              addStatusMessage(`[SUCCESS] Container accessible at: ${data.url}`);
+              addStatusMessage('[INFO] Opening in new tab...');
+
+              setTimeout(() => {
+                window.open(data.url, '_blank');
+              }, 1000);
+            } else if (data.type === 'error') {
+              updateConnectionStatus(`Launch failed: ${data.message}`, 'error');
+              addStatusMessage(`[ERROR] ${data.message}`);
+            }
+          }
+        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -106,6 +127,7 @@ function DistroCard({
       addStatusMessage(`[ERROR] ${errorMessage}`);
     } finally {
       setIsLaunching(false);
+      setDownloadProgress('');
     }
   };
 
@@ -173,6 +195,7 @@ function DistroCard({
   };
 
   const getButtonText = () => {
+    if (isLaunching && downloadProgress) return downloadProgress;
     if (isLaunching) return 'Launching...';
     if (selectedGui) return `Launch ${distro.name} with ${selectedGui.toUpperCase()}`;
     return 'Select GUI First';

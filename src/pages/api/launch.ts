@@ -2,7 +2,8 @@ import { exec } from 'child_process';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
-import * as net from 'net'; // Import net module
+import * as net from 'net';
+import * as pty from 'node-pty';
 
 let detectedEngine: string | null = null;
 
@@ -50,7 +51,7 @@ function execCommandWithOutput(command: string): Promise<ExecCommandResult> {
 
 async function findAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
-    const server = net.createServer(); // Use net.createServer()
+    const server = net.createServer();
     server.unref();
     server.on('error', reject);
     server.listen(0, () => {
@@ -58,6 +59,35 @@ async function findAvailablePort(): Promise<number> {
       server.close(() => {
         resolve(port);
       });
+    });
+  });
+}
+
+function execCommandWithPty(
+  command: string,
+  args: string[],
+  onProgress: (data: string) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ptyProcess = pty.spawn(command, args, {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 30,
+      cwd: process.env.HOME,
+      env: process.env
+    });
+
+    ptyProcess.on('data', (data) => {
+      console.log('PTY Data:', data);
+      onProgress(data);
+    });
+
+    ptyProcess.on('exit', ({ exitCode, signal }) => {
+      if (exitCode === 0 || (exitCode === undefined && signal === undefined)) {
+        resolve();
+      } else {
+        reject(new Error(`Process exited with code ${exitCode}, signal ${signal}`));
+      }
     });
   });
 }
@@ -88,51 +118,72 @@ export default async function handler(req: any, res: any) {
     console.log(`API: Using container engine: ${detectedEngine}`);
   }
 
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const sendProgress = (type: string, message: string, data?: any) => {
+    const payload = JSON.stringify({ type, message, ...data });
+    res.write(`data: ${payload}\n\n`);
+  };
+
   const imageTag = `lscr.io/linuxserver/webtop:${distro}-${gui}`;
   const containerName = `brewboxes-${distro}-${gui}`;
   let tempDir: string | undefined;
 
   try {
-    // Create a temporary directory for the Dockerfile
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'brewboxes-'));
-    const dockerfileContent = `FROM ${imageTag}\n\nENV PUID=1000\nENV PGID=1000\nENV TZ=Etc/UTC\n\nENTRYPOINT ["/init"]`;
+    const dockerfileContent = `FROM ${imageTag}`;
     const dockerfilePath = path.join(tempDir, 'Dockerfile');
     await fs.writeFile(dockerfilePath, dockerfileContent);
     console.log(`API: Dockerfile created at ${dockerfilePath}`);
 
-    console.log(`API: Attempting to build image: ${imageTag} from ${tempDir}`);
-    // Build the image (if not already built)
-    const buildCommand = `${detectedEngine} build -t ${imageTag} ${tempDir}`;
-    const { stdout: buildStdout, stderr: buildStderr } = await execCommandWithOutput(buildCommand);
-    console.log('API: Build command stdout:', buildStdout);
-    console.log('API: Build command stderr:', buildStderr);
+    sendProgress('status', 'Building image...');
 
+    await execCommandWithPty(
+      detectedEngine,
+      ['build', '-t', imageTag, tempDir],
+      (data) => {
+        const lines = data.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.includes('skipped: already exists') || trimmed.includes('done') || trimmed.includes('STEP 1/1') || trimmed.includes('Trying to pull')) {
+            // skip
+          } else {
+            sendProgress('progress', line);
+          }
+        }
+      }
+    );
+
+    sendProgress('status', 'Image built successfully');
+
+    sendProgress('status', 'Allocating ports...');
     const fePort = await findAvailablePort();
     const wsPort = await findAvailablePort();
-    console.log(`API: Allocated ports - FE: ${fePort}, WS: ${wsPort}`);
 
-    console.log(`API: Attempting to run container: ${containerName}`);
-    // Run the container
-    const runCommand = `${detectedEngine} run -d --name ${containerName} -p ${fePort}:3000 -p ${wsPort}:8082 ${imageTag}`;
-    console.log(`API: Run command: ${runCommand}`);
-    const { stdout: runStdout, stderr: runStderr } = await execCommandWithOutput(runCommand);
-    console.log('API: Run command stdout:', runStdout);
-    console.log('API: Run command stderr:', runStderr);
+    sendProgress('status', 'Starting container...');
+    const { stdout: runStdout } = await execCommandWithOutput(
+      `${detectedEngine} run -d --name ${containerName} -p ${fePort}:3000 -p ${wsPort}:8082 ${imageTag}`
+    );
 
-    const containerId = runStdout.trim(); // Container ID is typically on stdout for run -d
+    const containerId = runStdout.trim();
     if (!containerId) {
-        console.error('API: Could not determine container ID from run command output.');
-        throw new Error('Could not determine container ID from run command output.');
+      throw new Error('Could not determine container ID from run command output.');
     }
     const url = `http://localhost:${fePort}`;
 
-    console.log(`API: Container launched: ID=${containerId}, URL=${url}`);
+    sendProgress('complete', 'Container launched successfully!', {
+      success: true,
+      url,
+      container_id: containerId,
+    });
 
-    res.status(200).json({ success: true, message: 'Container launched successfully!', url, container_id: containerId });
+    res.end();
   } catch (error) {
     console.error('API: Error in /api/launch catch block:', error);
-    // Ensure a JSON response is always sent
-    res.status(500).json({ success: false, message: error.message || 'An unknown error occurred during container launch.', rawError: error });
+    sendProgress('error', error.message || 'An unknown error occurred during container launch.');
+    res.end();
   } finally {
     if (tempDir) {
       console.log(`API: Cleaning up temporary directory: ${tempDir}`);
