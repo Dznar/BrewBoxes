@@ -49,13 +49,34 @@ function DistroCard({
   const [isStopping, setIsStopping] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<string>('');
+  const [showPrivateModal, setShowPrivateModal] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [mem, setMem] = useState('');
+  const [cpu, setCpu] = useState('');
 
-  const handleLaunch = async () => {
+  const handleLaunch = async (isPrivate = false) => {
     if (!selectedGui) {
       updateConnectionStatus('Please select a GUI first!', 'error');
       return;
     }
 
+    if (isPrivate) {
+      setShowPrivateModal(true);
+      return;
+    }
+
+    await performLaunch();
+  };
+
+  const performLaunch = async (
+    privateUsername?: string,
+    privatePassword?: string,
+    containerName?: string,
+    containerMem?: string,
+    containerCpu?: string
+  ) => {
     setIsLaunching(true);
     setDownloadProgress('');
     clearStatusMessages();
@@ -64,16 +85,33 @@ function DistroCard({
       'connecting'
     );
 
+    const body: any = {
+      distro: distro.id,
+      gui: selectedGui,
+    };
+
+    if (privateUsername && privatePassword) {
+      body.username = privateUsername;
+      body.password = privatePassword;
+    }
+
+    if (containerName) {
+      body.name = containerName;
+    }
+    if (containerMem) {
+      body.mem = containerMem;
+    }
+    if (containerCpu) {
+      body.cpu = containerCpu;
+    }
+
     try {
       const response = await fetch('/api/launch', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          distro: distro.id,
-          gui: selectedGui,
-        }),
+        body: JSON.stringify(body),
       });
 
       const reader = response.body?.getReader();
@@ -106,6 +144,7 @@ function DistroCard({
                 distroId: distro.id,
                 guiId: selectedGui,
                 url: data.url,
+                isPrivate: !!(privateUsername && privatePassword),
               });
               updateConnectionStatus(data.message, 'success');
               addStatusMessage(`[SUCCESS] Container accessible at: ${data.url}`);
@@ -194,11 +233,25 @@ function DistroCard({
     }
   };
 
-  const getButtonText = () => {
+  const getButtonText = (isPrivate = false) => {
     if (isLaunching && downloadProgress) return downloadProgress;
     if (isLaunching) return 'Launching...';
-    if (selectedGui) return `Launch ${distro.name} with ${selectedGui.toUpperCase()}`;
+    if (selectedGui) return isPrivate ? `Launch Private Container` : `Launch ${distro.name} with ${selectedGui.toUpperCase()}`;
     return 'Select GUI First';
+  };
+
+  const handlePrivateSubmit = () => {
+    if (!username || !password) {
+      updateConnectionStatus('Please enter both username and password', 'error');
+      return;
+    }
+    setShowPrivateModal(false);
+    performLaunch(username, password, name, mem, cpu);
+    setUsername('');
+    setPassword('');
+    setName('');
+    setMem('');
+    setCpu('');
   };
 
   const runningContainer = runningContainers.find(
@@ -242,19 +295,30 @@ function DistroCard({
         </div>
 
         <button
-          onClick={handleLaunch}
+          onClick={() => handleLaunch(false)}
           disabled={!selectedGui || isLaunching || !!runningContainer}
           className={`w-full mt-4 ${distro.color} hover:opacity-90 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
             isLaunching ? 'animate-pulse' : ''
           }`}
         >
-          {getButtonText()}
+          {getButtonText(false)}
+        </button>
+
+        <button
+          onClick={() => handleLaunch(true)}
+          disabled={!selectedGui || isLaunching || !!runningContainer}
+          className={`w-full mt-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-medium py-3 px-6 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
+            isLaunching ? 'animate-pulse' : ''
+          }`}
+        >
+          {getButtonText(true)}
         </button>
 
         {runningContainer && (
           <div className="mt-4 space-y-2 p-3 bg-gray-700 rounded-lg">
             <div className="text-sm text-gray-300">
               <span className="font-medium">Running:</span> {runningContainer.id.slice(0, 12)}
+              {runningContainer.isPrivate && <span className="ml-2 text-purple-400">(Private)</span>}
             </div>
             <div className="flex gap-2">
               <button
@@ -281,6 +345,104 @@ function DistroCard({
           </div>
         )}
       </div>
+
+      {showPrivateModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setShowPrivateModal(false)}>
+          <div className="bg-gray-800 rounded-2xl p-6 max-w-md w-full mx-4 border border-gray-700" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-xl font-semibold mb-4">Launch Private Container</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              Enter credentials for your private container. These will be set as environment variables.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Container Name (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
+                  placeholder="e.g., my-dev-container"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Memory (GB, Optional)
+                </label>
+                <input
+                  type="number"
+                  value={mem}
+                  onChange={(e) => setMem(e.target.value)}
+                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
+                  placeholder="e.g., 4"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  CPUs (Optional)
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={cpu}
+                  onChange={(e) => setCpu(e.target.value)}
+                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
+                  placeholder="e.g., 2.0"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
+                  placeholder="Enter username"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
+                  placeholder="Enter password"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowPrivateModal(false);
+                  setUsername('');
+                  setPassword('');
+                }}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePrivateSubmit}
+                className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:opacity-90 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200"
+              >
+                Launch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

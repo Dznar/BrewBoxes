@@ -10,6 +10,7 @@ export interface RunningContainer {
   distroId: string;
   guiId: string;
   url: string;
+  isPrivate?: boolean;
 }
 
 function App() {

@@ -99,8 +99,8 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ message: 'Method not allowed' });
   }
 
-  const { distro, gui } = req.body;
-  console.log(`API: Received request for distro: ${distro}, gui: ${gui}`);
+  const { distro, gui, username, password, name, mem, cpu } = req.body;
+  console.log(`API: Received request for distro: ${distro}, gui: ${gui}, private: ${!!(username && password)}, name: ${name}, mem: ${mem}, cpu: ${cpu}`);
 
   if (!distro || !gui) {
     console.error('API: Missing distro or gui in request body.');
@@ -163,9 +163,25 @@ export default async function handler(req: any, res: any) {
     const wsPort = await findAvailablePort();
 
     sendProgress('status', 'Starting container...');
-    const { stdout: runStdout } = await execCommandWithOutput(
-      `${detectedEngine} run -d --name ${containerName} -p ${fePort}:3000 -p ${wsPort}:8082 ${imageTag}`
-    );
+
+    let runCommand = `${detectedEngine} run -d`;
+    if (name) {
+      runCommand += ` --name ${name}`;
+    } else {
+      runCommand += ` --name ${containerName}`;
+    }
+    if (username && password) {
+      runCommand += ` -e CUSTOM_USER=${username} -e PASSWORD=${password}`;
+    }
+    if (mem) {
+      runCommand += ` --memory=${mem}g`;
+    }
+    if (cpu) {
+      runCommand += ` --cpus=${cpu}`;
+    }
+    runCommand += ` -p ${fePort}:3000 -p ${wsPort}:8082 ${imageTag}`;
+
+    const { stdout: runStdout } = await execCommandWithOutput(runCommand);
 
     const containerId = runStdout.trim();
     if (!containerId) {
