@@ -1,19 +1,25 @@
 { pkgs ? import <nixpkgs> {} }:
 
 pkgs.mkShell {
-  name = "node-pty-dev-shell";
-
+  # We only need the dev tools now, as the libraries are in your system
   buildInputs = with pkgs; [
-    python3
+    rustc
+    cargo
+    nodejs
+    pkg-config
     gcc
     gnumake
-    pkg-config
-    zlib
-    zlib.dev
-    openssl
+    binutils
+    python3
     which
+    zlib
+    webkitgtk_4_1.dev
+    gtk3.dev
+    openssl.dev
   ];
 
-  # Ensure npm uses the provided python for node-gyp
-
+  shellHook = ''
+    echo "Brew Boxes Dev Shell (System-Linked)!"
+    echo "GStreamer Path: $GST_PLUGIN_SYSTEM_PATH_1_0"
+  '';
 }

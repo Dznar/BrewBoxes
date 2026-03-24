@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import DistroCard from './DistroCard';
-import { RunningContainer } from '../App';
+import { RunningContainer, PrivateContainer } from '../App';
 
 interface DistroGridProps {
   addStatusMessage: (message: string) => void;
@@ -10,8 +10,10 @@ interface DistroGridProps {
     type: 'success' | 'error' | 'connecting' | 'info'
   ) => void;
   runningContainers: RunningContainer[];
+  privateContainers: PrivateContainer[];
   addRunningContainer: (container: RunningContainer) => void;
   removeRunningContainer: (containerId: string) => void;
+  refreshPrivateContainers: () => Promise<void>;
 }
 
 interface DistroConfig {
@@ -89,7 +91,7 @@ const distros: DistroConfig[] = [
     guis: [
       { id: 'i3', name: 'i3', description: 'Tiling window manager' },
       { id: 'mate', name: 'MATE', description: 'Traditional desktop' },
-      { id: 'latest', name: 'XFCE', description: 'Lightweight and fast' },
+      { id: 'xfce', name: 'XFCE', description: 'Lightweight and fast' },
     ],
   },
   {
@@ -111,8 +113,10 @@ function DistroGrid({
   clearStatusMessages,
   updateConnectionStatus,
   runningContainers,
+  privateContainers,
   addRunningContainer,
   removeRunningContainer,
+  refreshPrivateContainers,
 }: DistroGridProps) {
   const [selectedGuis, setSelectedGuis] = useState<Record<string, string>>({});
 
@@ -136,8 +140,10 @@ function DistroGrid({
           updateConnectionStatus={updateConnectionStatus}
           animationDelay={index * 100}
           runningContainers={runningContainers}
+          privateContainers={privateContainers}
           addRunningContainer={addRunningContainer}
           removeRunningContainer={removeRunningContainer}
+          refreshPrivateContainers={refreshPrivateContainers}
         />
       ))}
     </div>

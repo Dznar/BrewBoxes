@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Header from './components/Header';
 import StatusLog from './components/StatusLog';
 import DistroGrid from './components/DistroGrid';
 import Footer from './components/Footer';
 import ConnectionStatus from './components/ConnectionStatus';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface RunningContainer {
   id: string;
@@ -13,9 +15,19 @@ export interface RunningContainer {
   isPrivate?: boolean;
 }
 
+export interface PrivateContainer {
+  id: string;
+  name: string;
+  distro: string;
+  gui: string;
+  username: string;
+  port: number;
+}
+
 function App() {
   const [statusMessages, setStatusMessages] = useState<string[]>([]);
   const [runningContainers, setRunningContainers] = useState<RunningContainer[]>([]);
+  const [privateContainers, setPrivateContainers] = useState<PrivateContainer[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<{
     message: string;
     type: 'success' | 'error' | 'connecting' | 'info';
@@ -29,6 +41,40 @@ function App() {
   const addStatusMessage = (message: string) => {
     setStatusMessages((prev) => [...prev, message]);
   };
+
+  const refreshPrivateContainers = useCallback(async () => {
+    try {
+      const containers = await invoke<PrivateContainer[]>('list_private_containers');
+      setPrivateContainers(containers);
+    } catch (error) {
+      console.error('Failed to list private containers:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshPrivateContainers();
+
+    let unlisten: () => void;
+    
+    const setupListener = async () => {
+      unlisten = await listen<any>('progress', (event) => {
+        const data = event.payload;
+        if (data.type === 'status') {
+          addStatusMessage(`[INFO] ${data.message}`);
+        } else if (data.type === 'progress') {
+          // Keep the raw message (with ANSI codes) for the terminal renderer
+          if (data.message) {
+            addStatusMessage(data.message);
+          }
+        }
+      });
+    };
+
+    setupListener();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [refreshPrivateContainers]);
 
   const clearStatusMessages = () => {
     setStatusMessages([]);
@@ -49,10 +95,14 @@ function App() {
 
   const addRunningContainer = (container: RunningContainer) => {
     setRunningContainers((prev) => [...prev, container]);
+    if (container.isPrivate) {
+      refreshPrivateContainers();
+    }
   };
 
   const removeRunningContainer = (containerId: string) => {
     setRunningContainers((prev) => prev.filter((c) => c.id !== containerId));
+    refreshPrivateContainers();
   };
 
   return (
@@ -73,8 +123,10 @@ function App() {
           clearStatusMessages={clearStatusMessages}
           updateConnectionStatus={updateConnectionStatus}
           runningContainers={runningContainers}
+          privateContainers={privateContainers}
           addRunningContainer={addRunningContainer}
           removeRunningContainer={removeRunningContainer}
+          refreshPrivateContainers={refreshPrivateContainers}
         />
       </main>
 

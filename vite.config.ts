@@ -1,20 +1,24 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// https://vitejs.dev/config/
+// https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-  optimizeDeps: {
-    exclude: ['lucide-react'],
+  // Vite 8 natively supports tsconfig paths
+  resolve: {
+    tsconfigPaths: true,
   },
+  // Tauri expects a fixed port
   server: {
-    proxy: {
-      '/api': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
-    },
+    port: 5173,
+    strictPort: true,
+    // Vite 8 feature: forwards browser logs to the terminal
+    forwardConsole: true,
+  },
+  build: {
+    // Vite 8 uses Rolldown (Rust) by default for builds
+    target: process.env.TAURI_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+    // Produce sourcemaps for debug builds
+    sourcemap: !!process.env.TAURI_DEBUG,
   },
 });
-

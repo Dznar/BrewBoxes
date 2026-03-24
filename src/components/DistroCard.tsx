@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { RunningContainer } from '../App';
-
+import { useState, useEffect } from 'react';
+import { RunningContainer, PrivateContainer } from '../App';
+import { invoke } from '@tauri-apps/api/core';
 
 interface GUI {
   id: string;
@@ -29,8 +29,10 @@ interface DistroCardProps {
   ) => void;
   animationDelay: number;
   runningContainers: RunningContainer[];
+  privateContainers: PrivateContainer[];
   addRunningContainer: (container: RunningContainer) => void;
   removeRunningContainer: (containerId: string) => void;
+  refreshPrivateContainers: () => Promise<void>;
 }
 
 function DistroCard({
@@ -42,19 +44,17 @@ function DistroCard({
   updateConnectionStatus,
   animationDelay,
   runningContainers,
+  privateContainers,
   addRunningContainer,
   removeRunningContainer,
+  refreshPrivateContainers,
 }: DistroCardProps) {
   const [isLaunching, setIsLaunching] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<string>('');
   const [showPrivateModal, setShowPrivateModal] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [mem, setMem] = useState('');
-  const [cpu, setCpu] = useState('');
 
   const handleLaunch = async (isPrivate = false) => {
     if (!selectedGui) {
@@ -70,103 +70,40 @@ function DistroCard({
     await performLaunch();
   };
 
-  const performLaunch = async (
-    privateUsername?: string,
-    privatePassword?: string,
-    containerName?: string,
-    containerMem?: string,
-    containerCpu?: string
-  ) => {
+  const performLaunch = async (privateUsername?: string, privatePassword?: string) => {
     setIsLaunching(true);
-    setDownloadProgress('');
     clearStatusMessages();
     updateConnectionStatus(
       `Launching ${distro.name} with ${selectedGui.toUpperCase()}...`,
       'connecting'
     );
 
-    const body: any = {
-      distro: distro.id,
-      gui: selectedGui,
-    };
-
-    if (privateUsername && privatePassword) {
-      body.username = privateUsername;
-      body.password = privatePassword;
-    }
-
-    if (containerName) {
-      body.name = containerName;
-    }
-    if (containerMem) {
-      body.mem = containerMem;
-    }
-    if (containerCpu) {
-      body.cpu = containerCpu;
-    }
-
     try {
-      const response = await fetch('/api/launch', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
+      const result: any = await invoke('launch_container', {
+        distro: distro.id,
+        gui: selectedGui,
+        username: privateUsername || null,
+        password: privatePassword || null,
       });
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-
-      if (!reader) {
-        throw new Error('Failed to get response reader');
-      }
-
-      let result;
-      while (!(result = await reader.read()).done) {
-        const chunk = decoder.decode(result.value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6));
-
-            if (data.type === 'status') {
-              addStatusMessage(`[INFO] ${data.message}`);
-              setDownloadProgress(data.message);
-            } else if (data.type === 'progress') {
-              if (data.percent) {
-                setDownloadProgress(`Downloading: ${data.percent}`);
-              }
-              addStatusMessage(`[PROGRESS] ${data.message}`);
-            } else if (data.type === 'complete') {
-              addRunningContainer({
-                id: data.container_id,
-                distroId: distro.id,
-                guiId: selectedGui,
-                url: data.url,
-                isPrivate: !!(privateUsername && privatePassword),
-              });
-              updateConnectionStatus(data.message, 'success');
-              addStatusMessage(`[SUCCESS] Container accessible at: ${data.url}`);
-              addStatusMessage('[INFO] Opening in new tab...');
-
-              setTimeout(() => {
-                window.open(data.url, '_blank');
-              }, 1000);
-            } else if (data.type === 'error') {
-              updateConnectionStatus(`Launch failed: ${data.message}`, 'error');
-              addStatusMessage(`[ERROR] ${data.message}`);
-            }
-          }
-        }
+      if (result.success) {
+        addRunningContainer({
+          id: result.container_id,
+          distroId: distro.id,
+          guiId: selectedGui,
+          url: result.url,
+          isPrivate: !!(privateUsername && privatePassword),
+        });
+        updateConnectionStatus(result.message, 'success');
+        addStatusMessage(`[SUCCESS] Container launched. ID: ${result.container_id.slice(0, 12)}`);
+        addStatusMessage(`[INFO] New window opened at: ${result.url}`);
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      updateConnectionStatus(`Error: ${errorMessage}`, 'error');
+      const errorMessage = typeof error === 'string' ? error : JSON.stringify(error);
+      updateConnectionStatus(`Launch failed: ${errorMessage}`, 'error');
       addStatusMessage(`[ERROR] ${errorMessage}`);
     } finally {
       setIsLaunching(false);
-      setDownloadProgress('');
     }
   };
 
@@ -175,25 +112,11 @@ function DistroCard({
     updateConnectionStatus('Stopping container...', 'connecting');
 
     try {
-      const response = await fetch('/api/stop', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ containerId }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        updateConnectionStatus('Container stopped successfully', 'success');
-        addStatusMessage(`[SUCCESS] Container ${containerId.slice(0, 12)} stopped`);
-      } else {
-        updateConnectionStatus(`Stop failed: ${data.message}`, 'error');
-        addStatusMessage(`[ERROR] ${data.message}`);
-      }
+      await invoke('stop_container', { id: containerId });
+      updateConnectionStatus('Container stopped successfully', 'success');
+      addStatusMessage(`[SUCCESS] Container ${containerId.slice(0, 12)} stopped`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = typeof error === 'string' ? error : JSON.stringify(error);
       updateConnectionStatus(`Error: ${errorMessage}`, 'error');
       addStatusMessage(`[ERROR] ${errorMessage}`);
     } finally {
@@ -206,26 +129,12 @@ function DistroCard({
     updateConnectionStatus('Deleting container...', 'connecting');
 
     try {
-      const response = await fetch('/api/delete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ containerId }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        removeRunningContainer(containerId);
-        updateConnectionStatus('Container deleted successfully', 'success');
-        addStatusMessage(`[SUCCESS] Container ${containerId.slice(0, 12)} deleted`);
-      } else {
-        updateConnectionStatus(`Delete failed: ${data.message}`, 'error');
-        addStatusMessage(`[ERROR] ${data.message}`);
-      }
+      await invoke('delete_container', { id: containerId });
+      removeRunningContainer(containerId);
+      updateConnectionStatus('Container deleted successfully', 'success');
+      addStatusMessage(`[SUCCESS] Container ${containerId.slice(0, 12)} deleted`);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = typeof error === 'string' ? error : JSON.stringify(error);
       updateConnectionStatus(`Error: ${errorMessage}`, 'error');
       addStatusMessage(`[ERROR] ${errorMessage}`);
     } finally {
@@ -234,7 +143,6 @@ function DistroCard({
   };
 
   const getButtonText = (isPrivate = false) => {
-    if (isLaunching && downloadProgress) return downloadProgress;
     if (isLaunching) return 'Launching...';
     if (selectedGui) return isPrivate ? `Launch Private Container` : `Launch ${distro.name} with ${selectedGui.toUpperCase()}`;
     return 'Select GUI First';
@@ -246,16 +154,17 @@ function DistroCard({
       return;
     }
     setShowPrivateModal(false);
-    performLaunch(username, password, name, mem, cpu);
+    performLaunch(username, password);
     setUsername('');
     setPassword('');
-    setName('');
-    setMem('');
-    setCpu('');
   };
 
   const runningContainer = runningContainers.find(
     (c) => c.distroId === distro.id && c.guiId === selectedGui
+  );
+
+  const relevantPrivateContainers = privateContainers.filter(
+    (c) => c.distro === distro.id && c.gui === selectedGui
   );
 
   return (
@@ -314,33 +223,82 @@ function DistroCard({
           {getButtonText(true)}
         </button>
 
+        {relevantPrivateContainers.length > 0 && (
+          <div className="mt-6 pt-4 border-t border-gray-700">
+            <h4 className="text-sm font-semibold text-purple-400 uppercase tracking-wider mb-3">Saved Private Sessions</h4>
+            <div className="space-y-3">
+              {relevantPrivateContainers.map((pc) => (
+                <div key={pc.id} className="bg-gray-800/50 rounded-xl p-3 border border-purple-500/20">
+                  <div className="flex justify-between items-center mb-3">
+                    <span className="text-sm font-medium text-gray-200">User: <span className="text-purple-300">{pc.username}</span></span>
+                    <span className="text-[10px] bg-purple-900/50 text-purple-200 px-2 py-0.5 rounded-full border border-purple-500/30">Persistent</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => performLaunch(pc.username, 'dummy')} // Password not needed for resume
+                      disabled={isLaunching}
+                      className="flex-1 bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium py-2 rounded-lg transition-colors"
+                    >
+                      Resume
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (confirm(`Delete session for ${pc.username}? This will erase all data.`)) {
+                          await invoke('delete_container', { id: pc.name });
+                          refreshPrivateContainers();
+                        }
+                      }}
+                      className="px-3 bg-gray-700 hover:bg-red-900/50 text-gray-400 hover:text-red-200 rounded-lg transition-colors"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {runningContainer && (
           <div className="mt-4 space-y-2 p-3 bg-gray-700 rounded-lg">
             <div className="text-sm text-gray-300">
               <span className="font-medium">Running:</span> {runningContainer.id.slice(0, 12)}
               {runningContainer.isPrivate && <span className="ml-2 text-purple-400">(Private)</span>}
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => window.open(runningContainer.url, '_blank')}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200"
-              >
-                Open
-              </button>
-              <button
-                onClick={() => handleStop(runningContainer.id)}
-                disabled={isStopping || isDeleting}
-                className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isStopping ? 'Stopping...' : 'Stop'}
-              </button>
-              <button
-                onClick={() => handleDelete(runningContainer.id)}
-                disabled={isStopping || isDeleting}
-                className="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isDeleting ? 'Deleting...' : 'Delete'}
-              </button>
+            <div className="flex flex-col gap-2">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => invoke('open_container_window', { 
+                    label: `container-${runningContainer.id.slice(0, 12)}`, 
+                    url: runningContainer.url 
+                  })}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200"
+                >
+                  Open App
+                </button>
+                <button
+                  onClick={() => invoke('open_in_browser', { url: runningContainer.url })}
+                  className="flex-1 bg-teal-600 hover:bg-teal-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200"
+                >
+                  Browser
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleStop(runningContainer.id)}
+                  disabled={isStopping || isDeleting}
+                  className="flex-1 bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isStopping ? 'Stopping...' : 'Stop'}
+                </button>
+                <button
+                  onClick={() => handleDelete(runningContainer.id)}
+                  disabled={isStopping || isDeleting}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isDeleting ? 'Deleting...' : 'Delete'}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -355,46 +313,6 @@ function DistroCard({
             </p>
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Container Name (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
-                  placeholder="e.g., my-dev-container"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Memory (GB, Optional)
-                </label>
-                <input
-                  type="number"
-                  value={mem}
-                  onChange={(e) => setMem(e.target.value)}
-                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
-                  placeholder="e.g., 4"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  CPUs (Optional)
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={cpu}
-                  onChange={(e) => setCpu(e.target.value)}
-                  className="w-full bg-gray-700 text-white rounded-lg px-4 py-2 border border-gray-600 focus:border-purple-500 focus:outline-none"
-                  placeholder="e.g., 2.0"
-                />
-              </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
                   Username

@@ -1,3 +1,0 @@
-Feature1: add in "Launch Private Container"private as OPTIONAL naming the container, deciding how much CPU and/or RAM a container would get "--name '$name'   --memory='$mem'g   --cpus='$cpu' ", where $name,$mem and  $cpu are all variables, and again each of them is optional to add.
-Feature2: we are already using node-pty for output, we should add above or below it 1 line for cli command input.
-Feature3: redesign the main page UI to fit the logo name and color "BrewBoxes" where it has a glassy look with a hint of calm brown coffee.
