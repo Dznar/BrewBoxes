@@ -1,9 +1,9 @@
 [package]
-name = "app"
+name = "brew-boxes"
 version = "0.1.0"
 description = "Container-Launcher"
 authors = ["Mrabet Fakhri"]
-license = ""
+license = "MIT"
 repository = ""
 edition = "2024"
 

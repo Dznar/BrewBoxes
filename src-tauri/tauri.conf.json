@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Brew Boxes Dashboard",
+        "title": "Brew Boxes",
         "width": 1200,
         "height": 800,
         "resizable": true,
