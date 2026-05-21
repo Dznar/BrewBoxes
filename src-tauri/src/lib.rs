@@ -73,12 +73,22 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 }
 
 fn detect_engine() -> Result<String, String> {
-    if StdCommand::new("podman").arg("--version").output().is_ok() {
-        return Ok("podman".to_string());
+    if cfg!(windows) {
+        // On Windows, we MUST prefer .exe to avoid picking up extension-less shell scripts (error 193)
+        for engine in ["podman.exe", "docker.exe"] {
+            if StdCommand::new(engine).arg("--version").output().is_ok() {
+                return Ok(engine.to_string());
+            }
+        }
     }
-    if StdCommand::new("docker").arg("--version").output().is_ok() {
-        return Ok("docker".to_string());
+
+    // Standard detection
+    for engine in ["podman", "docker"] {
+        if StdCommand::new(engine).arg("--version").output().is_ok() {
+            return Ok(engine.to_string());
+        }
     }
+
     Err("No container engine found (podman or docker)".to_string())
 }
 
