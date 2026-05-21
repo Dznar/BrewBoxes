@@ -74,15 +74,21 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
-        // On Windows, we MUST prefer .exe to avoid picking up extension-less shell scripts (error 193)
+        // On Windows, use 'where' to find the absolute path
         for engine in ["podman.exe", "docker.exe"] {
-            if StdCommand::new(engine).arg("--version").output().is_ok() {
-                return Ok(engine.to_string());
+            let output = StdCommand::new("where").arg(engine).output();
+            if let Ok(out) = output {
+                if out.status.success() {
+                    let path = String::from_utf8_lossy(&out.stdout).trim().lines().next().unwrap_or("").to_string();
+                    if !path.is_empty() {
+                        return Ok(path);
+                    }
+                }
             }
         }
     }
 
-    // Standard detection
+    // Standard detection/fallback
     for engine in ["podman", "docker"] {
         if StdCommand::new(engine).arg("--version").output().is_ok() {
             return Ok(engine.to_string());
@@ -183,7 +189,7 @@ async fn launch_container(
     fs::write(&dockerfile_path, format!("FROM {}", image_tag))
         .map_err(|e| e.to_string())?;
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Building image..."})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": format!("Building image using {}...", engine)})).unwrap();
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -196,10 +202,13 @@ async fn launch_container(
         .map_err(|e| e.to_string())?;
 
     let mut cmd = CommandBuilder::new(&engine);
-    cmd.args(["build", "-t", &image_tag, temp_dir.path().to_str().unwrap()]);
+    // Use --progress=plain to ensure logs are captured reliably even if TTY detection fails
+    cmd.args(["build", "--progress=plain", "-t", &image_tag, temp_dir.path().to_str().unwrap()]);
     
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn build: {}", e))?;
     drop(pair.slave);
+
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Build process started, streaming logs..."})).unwrap();
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let window_clone = window.clone();
@@ -215,11 +224,11 @@ async fn launch_container(
 
     let _ = child.wait().map_err(|e| e.to_string())?;
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Allocating ports..."})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Build completed! Allocating ports..."})).unwrap();
     let fe_port = find_available_port();
     let ws_port = find_available_port();
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Starting container..."})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": format!("Starting container using {}...", engine)})).unwrap();
 
     let mut run_args = vec![
         "run".to_string(),
