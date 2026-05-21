@@ -174,57 +174,80 @@ async fn launch_container(
         }
     }
 
+    window.emit("progress", serde_json::json!({"type": "status", "message": format!("Checking engine status ({})...", engine)})).unwrap();
+    
+    // Check if engine is responsive
+    let info = StdCommand::new(&engine)
+        .arg("info")
+        .output();
+    
+    if info.is_err() || !info.as_ref().unwrap().status.success() {
+        let err_msg = if let Ok(out) = info {
+            String::from_utf8_lossy(&out.stderr).to_string()
+        } else {
+            "Engine not responsive".to_string()
+        };
+        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman is started. Error: {}", err_msg));
+    }
+
     let image_tag = if distro == "alpine" && gui == "xfce" {
         "lscr.io/linuxserver/webtop:latest".to_string()
     } else {
         format!("lscr.io/linuxserver/webtop:{}-{}", distro, gui)
     };
 
-    let temp_dir = tempfile::Builder::new()
-        .prefix("brewboxes-")
-        .tempdir()
-        .map_err(|e| e.to_string())?;
+    // Check if image already exists locally to avoid unnecessary pull/build
+    let image_check = StdCommand::new(&engine)
+        .args(["images", "-q", &image_tag])
+        .output();
     
-    let dockerfile_path = temp_dir.path().join("Dockerfile");
-    fs::write(&dockerfile_path, format!("FROM {}", image_tag))
-        .map_err(|e| e.to_string())?;
+    let needs_pull = if let Ok(output) = image_check {
+        String::from_utf8_lossy(&output.stdout).trim().is_empty()
+    } else {
+        true
+    };
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": format!("Building image using {}...", engine)})).unwrap();
+    if needs_pull {
+        window.emit("progress", serde_json::json!({"type": "status", "message": format!("Image not found locally. Pulling {}...", image_tag)})).unwrap();
+        
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
 
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
+        let mut cmd = CommandBuilder::new(&engine);
+        // On Windows, pull output is often better than build output for progress
+        cmd.args(["pull", &image_tag]);
+        
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
+        drop(pair.slave);
 
-    let mut cmd = CommandBuilder::new(&engine);
-    // Use --progress=plain to ensure logs are captured reliably even if TTY detection fails
-    cmd.args(["build", "--progress=plain", "-t", &image_tag, temp_dir.path().to_str().unwrap()]);
-    
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn build: {}", e))?;
-    drop(pair.slave);
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs..."})).unwrap();
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Build process started, streaming logs..."})).unwrap();
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let window_clone = window.clone();
 
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let window_clone = window.clone();
+        thread::spawn(move || {
+            let mut buffer = [0u8; 1024];
+            while let Ok(n) = reader.read(&mut buffer) {
+                if n == 0 { break; }
+                let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
+            }
+        });
 
-    thread::spawn(move || {
-        let mut buffer = [0u8; 1024];
-        while let Ok(n) = reader.read(&mut buffer) {
-            if n == 0 { break; }
-            let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-            window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output})).unwrap();
-        }
-    });
+        let _ = child.wait().map_err(|e| e.to_string())?;
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Pull completed!"})).unwrap();
+    } else {
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Image found locally. Skipping pull."})).unwrap();
+    }
 
-    let _ = child.wait().map_err(|e| e.to_string())?;
-
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Build completed! Allocating ports..."})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Allocating ports..."})).unwrap();
     let fe_port = find_available_port();
     let ws_port = find_available_port();
 
