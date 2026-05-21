@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build",
-    "preview": "tauri preview",
-    "lint": "eslint .",
-    "vite": "vite",
-    "vite:build": "vite build"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.2.0",
