@@ -73,29 +73,50 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 }
 
 fn detect_engine() -> Result<String, String> {
-    // Try standard detection (PATH) first - more robust for shims on Windows
-    for engine in ["podman", "docker"] {
-        if StdCommand::new(engine).arg("--version").output().is_ok() {
-            return Ok(engine.to_string());
-        }
-    }
+    let engines = if cfg!(windows) {
+        vec!["podman.exe", "docker.exe", "lima.exe", "podman", "docker", "lima"]
+    } else {
+        vec!["podman", "docker", "lima"]
+    };
 
+    // Try absolute path search on Windows first to avoid extensionless Linux binaries
     if cfg!(windows) {
-        // Fallback to absolute path search on Windows
-        for engine in ["podman.exe", "docker.exe"] {
-            let output = StdCommand::new("where").arg(engine).output();
-            if let Ok(out) = output {
-                if out.status.success() {
-                    let path = String::from_utf8_lossy(&out.stdout).trim().lines().next().unwrap_or("").to_string();
-                    if !path.is_empty() {
-                        return Ok(path);
+        for engine in &engines {
+            if engine.ends_with(".exe") {
+                let output = StdCommand::new("where").arg(engine).output();
+                if let Ok(out) = output {
+                    if out.status.success() {
+                        for line in String::from_utf8_lossy(&out.stdout).lines() {
+                            let path = line.trim();
+                            if !path.is_empty() && path.to_lowercase().ends_with(".exe") {
+                                log::info!("Detected engine via where (.exe): {}", path);
+                                return Ok(path.to_string());
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    Err("No container engine found (podman or docker)".to_string())
+    // Standard detection (PATH)
+    for engine in engines {
+        if StdCommand::new(engine).arg("--version").output().is_ok() {
+            log::info!("Detected engine via PATH: {}", engine);
+            return Ok(engine.to_string());
+        }
+    }
+
+    Err("No container engine found (podman, docker, or lima)".to_string())
+}
+
+fn get_engine_args(engine: &str, sub_cmd: &str) -> (String, Vec<String>) {
+    let engine_lower = engine.to_lowercase();
+    if engine_lower.contains("lima") {
+        (engine.to_string(), vec!["nerdctl".to_string(), sub_cmd.to_string()])
+    } else {
+        (engine.to_string(), vec![sub_cmd.to_string()])
+    }
 }
 
 #[tauri::command]
@@ -128,8 +149,11 @@ async fn launch_container(
 
     // Check if container already exists (for private persistence)
     if is_private {
-        let inspect = StdCommand::new(&engine)
-            .args(["inspect", "--format", "{{.State.Status}}", &container_name])
+        let (cmd_bin, mut args) = get_engine_args(&engine, "inspect");
+        args.extend(["--format", "{{.State.Status}}", &container_name]);
+        
+        let inspect = StdCommand::new(&cmd_bin)
+            .args(&args)
             .output();
 
         if let Ok(output) = inspect {
@@ -138,12 +162,17 @@ async fn launch_container(
                 window.emit("progress", serde_json::json!({"type": "status", "message": format!("Found existing session ({}). Starting...", status)})).unwrap();
                 
                 if status != "running" {
-                    let _ = StdCommand::new(&engine).args(["start", &container_name]).status();
+                    let (start_bin, mut start_args) = get_engine_args(&engine, "start");
+                    start_args.push(container_name.clone());
+                    let _ = StdCommand::new(&start_bin).args(&start_args).status();
                 }
 
                 // Get port
-                let port_output = StdCommand::new(&engine)
-                    .args(["inspect", "--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name])
+                let (port_bin, mut port_args) = get_engine_args(&engine, "inspect");
+                port_args.extend(["--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name]);
+                
+                let port_output = StdCommand::new(&port_bin)
+                    .args(&port_args)
                     .output()
                     .map_err(|e| e.to_string())?;
                 
@@ -177,8 +206,9 @@ async fn launch_container(
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Checking engine status ({})...", engine)})).unwrap();
     
     // Check if engine is responsive
-    let info = StdCommand::new(&engine)
-        .arg("info")
+    let (info_bin, info_args) = get_engine_args(&engine, "info");
+    let info = StdCommand::new(&info_bin)
+        .args(&info_args)
         .output();
     
     if info.is_err() || !info.as_ref().unwrap().status.success() {
@@ -187,7 +217,7 @@ async fn launch_container(
         } else {
             "Engine not responsive".to_string()
         };
-        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman is started. Error: {}", err_msg));
+        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman/Lima is started. Error: {}", err_msg));
     }
 
     let image_tag = if distro == "alpine" && gui == "xfce" {
@@ -197,8 +227,11 @@ async fn launch_container(
     };
 
     // Check if image already exists locally to avoid unnecessary pull/build
-    let image_check = StdCommand::new(&engine)
-        .args(["images", "-q", &image_tag])
+    let (img_bin, mut img_args) = get_engine_args(&engine, "images");
+    img_args.extend(["-q", &image_tag]);
+    
+    let image_check = StdCommand::new(&img_bin)
+        .args(&img_args)
         .output();
     
     let needs_pull = if let Ok(output) = image_check {
@@ -220,12 +253,15 @@ async fn launch_container(
             })
             .map_err(|e| e.to_string())?;
 
-        let mut cmd = CommandBuilder::new(&engine);
+        let (pull_bin, mut pull_args) = get_engine_args(&engine, "pull");
+        pull_args.push(image_tag.clone());
+
+        let mut cmd = CommandBuilder::new(&pull_bin);
         // Force TTY-like behavior and color output
         cmd.env("TERM", "xterm-256color");
-        cmd.args(["pull", &image_tag]);
+        cmd.args(&pull_args);
         
-        log::info!("Spawning pull command: {} pull {}", engine, image_tag);
+        log::info!("Spawning pull command: {} {:?}", pull_bin, pull_args);
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
         drop(pair.slave);
 
@@ -260,12 +296,8 @@ async fn launch_container(
 
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Starting container using {}...", engine)})).unwrap();
 
-    let mut run_args = vec![
-        "run".to_string(),
-        "-d".to_string(),
-        "--name".to_string(),
-        container_name.clone(),
-    ];
+    let (run_bin, mut run_args) = get_engine_args(&engine, "run");
+    run_args.extend(["-d".to_string(), "--name".to_string(), container_name.clone()]);
 
     // Only add --rm if NOT private
     if !is_private {
@@ -285,7 +317,7 @@ async fn launch_container(
     run_args.push(format!("{}:8082", ws_port));
     run_args.push(image_tag);
 
-    let output = StdCommand::new(&engine)
+    let output = StdCommand::new(&run_bin)
         .args(run_args)
         .output()
         .map_err(|e| e.to_string())?;
@@ -352,8 +384,11 @@ async fn open_container_window(app: AppHandle, label: String, url: String) -> Re
 #[tauri::command]
 async fn stop_container(id: String) -> Result<(), String> {
     let engine = detect_engine()?;
-    let status = StdCommand::new(engine)
-        .args(["stop", &id])
+    let (cmd_bin, mut args) = get_engine_args(&engine, "stop");
+    args.push(id);
+
+    let status = StdCommand::new(&cmd_bin)
+        .args(&args)
         .status()
         .map_err(|e| e.to_string())?;
     
@@ -366,9 +401,18 @@ async fn stop_container(id: String) -> Result<(), String> {
 #[tauri::command]
 async fn delete_container(app: AppHandle, id: String) -> Result<(), String> {
     let engine = detect_engine()?;
-    let _ = StdCommand::new(&engine).args(["stop", &id]).status();
-    let status = StdCommand::new(engine)
-        .args(["rm", "-f", &id])
+    
+    // Stop first
+    let (stop_bin, mut stop_args) = get_engine_args(&engine, "stop");
+    stop_args.push(id.clone());
+    let _ = StdCommand::new(&stop_bin).args(&stop_args).status();
+
+    // Remove
+    let (rm_bin, mut rm_args) = get_engine_args(&engine, "rm");
+    rm_args.extend(["-f", &id]);
+    
+    let status = StdCommand::new(&rm_bin)
+        .args(&rm_args)
         .status()
         .map_err(|e| e.to_string())?;
     
