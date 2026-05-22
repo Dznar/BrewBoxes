@@ -88,24 +88,35 @@ fn get_engine_dir(app: &AppHandle) -> PathBuf {
 
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
-        // Strictly use Native Engine on Windows to avoid Docker Desktop / Podman Desktop reliability issues
-        let mut check_wsl = StdCommand::new("wsl");
-        check_wsl.args(["--list", "--quiet"]);
+        // Strictly use Native Engine on Windows
+        let mut check_distro = StdCommand::new("wsl");
+        check_distro.args(["-l", "-q"]);
         #[cfg(windows)]
-        check_wsl.creation_flags(0x08000000);
+        check_distro.creation_flags(0x08000000);
         
-        if let Ok(output) = check_wsl.output() {
+        if let Ok(output) = check_distro.output() {
             let list = String::from_utf16_lossy(
                 &output.stdout.chunks_exact(2)
                     .map(|a| u16::from_le_bytes([a[0], a[1]]))
                     .collect::<Vec<u16>>()
             );
+            
             if list.contains("brewboxes-engine") {
-                log::info!("Detected native engine: brewboxes-engine");
-                return Ok("native".to_string());
+                // Verify if nerdctl is actually installed inside
+                let mut check_binary = StdCommand::new("wsl");
+                check_binary.args(["-d", "brewboxes-engine", "-u", "root", "--", "ls", "/usr/local/bin/nerdctl"]);
+                #[cfg(windows)]
+                check_binary.creation_flags(0x08000000);
+                
+                if let Ok(out) = check_binary.output() {
+                    if out.status.success() {
+                        log::info!("Detected native engine: brewboxes-engine (verified)");
+                        return Ok("native".to_string());
+                    }
+                }
             }
         }
-        Err("Native Engine not found. Please use the 'Setup Native Engine' button to initialize the reliable container runtime.".to_string())
+        Err("Native Engine not found or incomplete. Please use the 'Setup Native Engine' button.".to_string())
     } else {
         let engines = vec!["podman", "docker"];
         for engine in engines {
@@ -120,20 +131,27 @@ fn detect_engine() -> Result<String, String> {
 
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
-        let mut cmd = StdCommand::new("wsl");
-        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--"];
+        // Robust containerd startup and socket check
+        let start_script = r#"
+            mkdir -p /run/containerd
+            if ! pgrep containerd > /dev/null; then
+                /usr/local/bin/containerd > /var/log/containerd.log 2>&1 &
+                # Wait up to 5 seconds for the socket to appear
+                for i in $(seq 1 25); do
+                    [ -S /run/containerd/containerd.sock ] && break
+                    sleep 0.2
+                done
+            fi
+        "#;
         
-        // Ensure containerd is running for native engine
-        // We ensure /run/containerd exists and start the daemon if not running
-        let start_script = "mkdir -p /run/containerd && (pgrep containerd > /dev/null || (containerd > /var/log/containerd.log 2>&1 &)) && sleep 1";
-        
-        let mut start_containerd = StdCommand::new("wsl");
-        start_containerd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
+        let mut start_cmd = StdCommand::new("wsl");
+        start_cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
         #[cfg(windows)]
-        start_containerd.creation_flags(0x08000000);
-        let _ = start_containerd.status();
+        start_cmd.creation_flags(0x08000000);
+        let _ = start_cmd.status();
 
-        wsl_args.push("/usr/local/bin/nerdctl"); // Use absolute path
+        let mut cmd = StdCommand::new("wsl");
+        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
         wsl_args.extend(args);
         cmd.args(wsl_args);
         #[cfg(windows)]
@@ -214,7 +232,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     
     // Extract nerdctl AND install compatibility layer for glibc binaries on Alpine
     let extract_script = format!(
-        "apk add --no-cache libc6-compat && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        "apk add --no-cache libc6-compat libgcc && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
         wsl_tar_path
     );
     
@@ -224,7 +242,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     extract.creation_flags(0x08000000);
     let status = extract.status().map_err(|e| format!("Failed to extract nerdctl: {}", e))?;
     if !status.success() { 
-        return Err("Failed to initialize container runtime inside WSL. This can happen if the path contains special characters or if WSL is busy.".to_string()); 
+        return Err("Failed to initialize container runtime inside WSL.".to_string()); 
     }
 
     window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete!"})).unwrap();
