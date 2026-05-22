@@ -77,14 +77,42 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
     false
 }
 
+fn get_engine_dir(app: &AppHandle) -> PathBuf {
+    let mut path = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    path.push("engine");
+    if !path.exists() {
+        let _ = fs::create_dir_all(&path);
+    }
+    path
+}
+
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
+        // 1. Check for Native Engine (brewboxes-engine)
+        let mut check_wsl = StdCommand::new("wsl");
+        check_wsl.args(["--list", "--quiet"]);
+        #[cfg(windows)]
+        check_wsl.creation_flags(0x08000000);
+        
+        if let Ok(output) = check_wsl.output() {
+            let list = String::from_utf16_lossy(
+                &output.stdout.chunks_exact(2)
+                    .map(|a| u16::from_le_bytes([a[0], a[1]]))
+                    .collect::<Vec<u16>>()
+            );
+            if list.contains("brewboxes-engine") {
+                log::info!("Detected native engine: brewboxes-engine");
+                return Ok("native".to_string());
+            }
+        }
+
+        // 2. Check for traditional engines
         let engines = vec!["podman.exe", "docker.exe"];
         for engine in &engines {
             let mut cmd = StdCommand::new("where");
             cmd.arg(engine);
             #[cfg(windows)]
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            cmd.creation_flags(0x08000000);
             
             let output = cmd.output();
             if let Ok(out) = output {
@@ -99,7 +127,7 @@ fn detect_engine() -> Result<String, String> {
                 }
             }
         }
-        Err("No container engine found (podman.exe or docker.exe). Please ensure Podman or Docker Desktop is installed and in your PATH.".to_string())
+        Err("No container engine found. You can use the 'Setup Native Engine' option to install a minimal engine.".to_string())
     } else {
         let engines = vec!["podman", "docker"];
         for engine in engines {
@@ -109,6 +137,98 @@ fn detect_engine() -> Result<String, String> {
             }
         }
         Err("No container engine found (podman or docker).".to_string())
+    }
+}
+
+#[tauri::command]
+async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("Native engine setup is only available on Windows.".to_string());
+    }
+
+    let engine_dir = get_engine_dir(&app);
+    let rootfs_tar = engine_dir.join("alpine-rootfs.tar.gz");
+    let nerdctl_tar = engine_dir.join("nerdctl-full.tar.gz");
+    let install_dir = engine_dir.join("distro");
+
+    if !install_dir.exists() {
+        fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+    }
+
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Starting Native Engine setup..."})).unwrap();
+
+    // 1. Download Alpine RootFS
+    if !rootfs_tar.exists() {
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine)..."})).unwrap();
+        let mut download = StdCommand::new("curl");
+        download.args(["-L", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz"]);
+        #[cfg(windows)]
+        download.creation_flags(0x08000000);
+        let status = download.status().map_err(|e| format!("Failed to download Alpine: {}", e))?;
+        if !status.success() { return Err("Failed to download Alpine rootfs.".to_string()); }
+    }
+
+    // 2. Download Nerdctl (Container Management)
+    if !nerdctl_tar.exists() {
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl)..."})).unwrap();
+        let mut download = StdCommand::new("curl");
+        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v1.7.6/nerdctl-full-1.7.6-linux-amd64.tar.gz"]);
+        #[cfg(windows)]
+        download.creation_flags(0x08000000);
+        let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
+        if !status.success() { return Err("Failed to download Nerdctl bundle.".to_string()); }
+    }
+
+    // 3. Import WSL Distro
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Importing BrewBoxes Engine into WSL..."})).unwrap();
+    let mut import = StdCommand::new("wsl");
+    import.args(["--import", "brewboxes-engine", install_dir.to_str().unwrap(), rootfs_tar.to_str().unwrap(), "--version", "2"]);
+    #[cfg(windows)]
+    import.creation_flags(0x08000000);
+    let status = import.status().map_err(|e| format!("Failed to import WSL distro: {}", e))?;
+    if !status.success() { return Err("WSL import failed. Please ensure WSL2 is enabled on your system.".to_string()); }
+
+    // 4. Extract Nerdctl inside distro
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Initializing container runtime inside engine..."})).unwrap();
+    
+    // Convert Windows paths to WSL paths (C:\foo -> /mnt/c/foo)
+    let wsl_tar_path = format!("/mnt/{}", nerdctl_tar.to_str().unwrap().replace(":", "").replace("\\", "/").to_lowercase());
+    
+    let mut extract = StdCommand::new("wsl");
+    extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &format!("mkdir -p /usr/local/bin && tar -C /usr/local -xzvf {}", wsl_tar_path)]);
+    #[cfg(windows)]
+    extract.creation_flags(0x08000000);
+    let status = extract.status().map_err(|e| format!("Failed to extract nerdctl: {}", e))?;
+    if !status.success() { return Err("Failed to initialize container runtime inside WSL.".to_string()); }
+
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete!"})).unwrap();
+    Ok(())
+}
+
+fn run_engine_cmd(engine: &str, args: Vec<&str>, window: Option<&Window>) -> StdCommand {
+    if engine == "native" {
+        let mut cmd = StdCommand::new("wsl");
+        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--"];
+        
+        // Ensure containerd is running for native engine
+        // We run it in background if not already running
+        let mut start_containerd = StdCommand::new("wsl");
+        start_containerd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", "pgrep containerd || (containerd > /dev/null 2>&1 &)"]);
+        #[cfg(windows)]
+        start_containerd.creation_flags(0x08000000);
+        let _ = start_containerd.status();
+
+        wsl_args.extend(args);
+        cmd.args(wsl_args);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        cmd
+    } else {
+        let mut cmd = StdCommand::new(engine);
+        cmd.args(args);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        cmd
     }
 }
 
@@ -142,10 +262,7 @@ async fn launch_container(
 
     // Check if container already exists (for private persistence)
     if is_private {
-        let mut inspect_cmd = StdCommand::new(&engine);
-        inspect_cmd.args(["inspect", "--format", "{{.State.Status}}", &container_name]);
-        #[cfg(windows)]
-        inspect_cmd.creation_flags(0x08000000);
+        let mut inspect_cmd = run_engine_cmd(&engine, vec!["inspect", "--format", "{{.State.Status}}", &container_name], Some(&window));
         let inspect = inspect_cmd.output();
 
         if let Ok(output) = inspect {
@@ -154,18 +271,18 @@ async fn launch_container(
                 window.emit("progress", serde_json::json!({"type": "status", "message": format!("Found existing session ({}). Starting...", status)})).unwrap();
                 
                 if status != "running" {
-                    let mut start_cmd = StdCommand::new(&engine);
-                    start_cmd.args(["start", &container_name]);
-                    #[cfg(windows)]
-                    start_cmd.creation_flags(0x08000000);
+                    let mut start_cmd = run_engine_cmd(&engine, vec!["start", &container_name], Some(&window));
                     let _ = start_cmd.status();
                 }
 
                 // Get port
-                let mut port_cmd = StdCommand::new(&engine);
-                port_cmd.args(["inspect", "--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name]);
-                #[cfg(windows)]
-                port_cmd.creation_flags(0x08000000);
+                let format_arg = if engine == "native" {
+                    "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}"
+                } else {
+                    "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}"
+                };
+
+                let mut port_cmd = run_engine_cmd(&engine, vec!["inspect", "--format", format_arg, &container_name], Some(&window));
                 let port_output = port_cmd.output()
                     .map_err(|e| e.to_string())?;
                 
@@ -199,10 +316,7 @@ async fn launch_container(
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Checking engine status ({})...", engine)})).unwrap();
     
     // Check if engine is responsive
-    let mut info_cmd = StdCommand::new(&engine);
-    info_cmd.arg("info");
-    #[cfg(windows)]
-    info_cmd.creation_flags(0x08000000);
+    let mut info_cmd = run_engine_cmd(&engine, vec!["info"], Some(&window));
     let info = info_cmd.output();
     
     if info.is_err() || !info.as_ref().unwrap().status.success() {
@@ -211,7 +325,7 @@ async fn launch_container(
         } else {
             "Engine not responsive".to_string()
         };
-        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman is started. Error: {}", err_msg));
+        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman is started, or use the Native Engine. Error: {}", err_msg));
     }
 
     let image_tag = if distro == "alpine" && gui == "xfce" {
@@ -221,10 +335,7 @@ async fn launch_container(
     };
 
     // Check if image already exists locally to avoid unnecessary pull/build
-    let mut img_cmd = StdCommand::new(&engine);
-    img_cmd.args(["images", "-q", &image_tag]);
-    #[cfg(windows)]
-    img_cmd.creation_flags(0x08000000);
+    let mut img_cmd = run_engine_cmd(&engine, vec!["images", "-q", &image_tag], Some(&window));
     let image_check = img_cmd.output();
     
     let needs_pull = if let Ok(output) = image_check {
@@ -236,14 +347,11 @@ async fn launch_container(
     if needs_pull {
         window.emit("progress", serde_json::json!({"type": "status", "message": format!("Image not found locally. Pulling {}...", image_tag)})).unwrap();
 
-        if cfg!(windows) {
-            // Windows: Use standard piped command to avoid PTY/TTY handshake hangs with Docker Desktop
-            let mut pull_cmd = StdCommand::new(&engine);
-            pull_cmd.args(["pull", &image_tag])
-                .stdout(std::process::Stdio::piped())
+        if cfg!(windows) || engine == "native" {
+            // Windows or Native: Use standard piped command to avoid PTY/TTY handshake hangs
+            let mut pull_cmd = run_engine_cmd(&engine, vec!["pull", &image_tag], Some(&window));
+            pull_cmd.stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            #[cfg(windows)]
-            pull_cmd.creation_flags(0x08000000);
             
             let mut child = pull_cmd.spawn()
                 .map_err(|e| format!("Failed to spawn pull: {}", e))?;
@@ -279,13 +387,13 @@ async fn launch_container(
             });
 
             let wait_res = child.wait().map_err(|e| format!("Failed to wait for pull: {}", e))?;
-            log::info!("Pull process (StdCommand) exited: {:?}", wait_res);
+            log::info!("Pull process exited: {:?}", wait_res);
             
             if !wait_res.success() {
-                return Err("Image pull failed. This usually happens if the container engine (Docker/Podman) crashes or loses its connection. Please try again.".to_string());
+                return Err("Image pull failed. This usually happens if the engine crashes or loses its connection. If you're using Docker Desktop, try switching to the Native Engine in Settings.".to_string());
             }
         } else {
-            // Linux: Use PTY for rich animated progress bars
+            // Linux (non-native): Use PTY for rich animated progress bars
             let pty_system = native_pty_system();
             let pair = pty_system
                 .openpty(PtySize {
@@ -340,31 +448,33 @@ async fn launch_container(
 
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Starting container using {}...", engine)})).unwrap();
 
-    let mut run_args = vec!["run".to_string(), "-d".to_string(), "--name".to_string(), container_name.clone()];
+    let mut run_args = vec!["run", "-d", "--name", &container_name];
 
     // Only add --rm if NOT private
     if !is_private {
-        run_args.push("--rm".to_string());
+        run_args.push("--rm");
     }
 
+    let mut env_vars = Vec::new();
     if let (Some(u), Some(p)) = (&username, &password) {
-        run_args.push("-e".to_string());
-        run_args.push(format!("CUSTOM_USER={}", u));
-        run_args.push("-e".to_string());
-        run_args.push(format!("PASSWORD={}", p));
+        env_vars.push(format!("CUSTOM_USER={}", u));
+        env_vars.push(format!("PASSWORD={}", p));
     }
 
-    run_args.push("-p".to_string());
-    run_args.push(format!("{}:3000", fe_port));
-    run_args.push("-p".to_string());
-    run_args.push(format!("{}:8082", ws_port));
-    run_args.push(image_tag);
+    for env in &env_vars {
+        run_args.push("-e");
+        run_args.push(env);
+    }
 
-    let mut run_cmd = StdCommand::new(&engine);
-    run_cmd.args(run_args);
-    #[cfg(windows)]
-    run_cmd.creation_flags(0x08000000);
+    let p1 = format!("{}:3000", fe_port);
+    let p2 = format!("{}:8082", ws_port);
+    run_args.push("-p");
+    run_args.push(&p1);
+    run_args.push("-p");
+    run_args.push(&p2);
+    run_args.push(&image_tag);
 
+    let mut run_cmd = run_engine_cmd(&engine, run_args, Some(&window));
     let output = run_cmd.output()
         .map_err(|e| e.to_string())?;
 
@@ -430,10 +540,7 @@ async fn open_container_window(app: AppHandle, label: String, url: String) -> Re
 #[tauri::command]
 async fn stop_container(id: String) -> Result<(), String> {
     let engine = detect_engine()?;
-    let mut cmd = StdCommand::new(&engine);
-    cmd.args(["stop", &id]);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000);
+    let mut cmd = run_engine_cmd(&engine, vec!["stop", &id], None);
     
     let status = cmd.status()
         .map_err(|e| e.to_string())?;
@@ -449,17 +556,11 @@ async fn delete_container(app: AppHandle, id: String) -> Result<(), String> {
     let engine = detect_engine()?;
     
     // Stop first
-    let mut stop_cmd = StdCommand::new(&engine);
-    stop_cmd.args(["stop", &id]);
-    #[cfg(windows)]
-    stop_cmd.creation_flags(0x08000000);
+    let mut stop_cmd = run_engine_cmd(&engine, vec!["stop", &id], None);
     let _ = stop_cmd.status();
 
     // Remove
-    let mut rm_cmd = StdCommand::new(&engine);
-    rm_cmd.args(["rm", "-f", &id]);
-    #[cfg(windows)]
-    rm_cmd.creation_flags(0x08000000);
+    let mut rm_cmd = run_engine_cmd(&engine, vec!["rm", "-f", &id], None);
     
     let status = rm_cmd.status()
         .map_err(|e| e.to_string())?;
@@ -474,6 +575,14 @@ async fn delete_container(app: AppHandle, id: String) -> Result<(), String> {
     save_containers(&app, containers);
 
     Ok(())
+}
+
+#[tauri::command]
+async fn check_engine_status() -> Result<Option<String>, String> {
+    match detect_engine() {
+        Ok(engine) => Ok(Some(engine)),
+        Err(_) => Ok(None),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -495,7 +604,9 @@ pub fn run() {
         stop_container,
         delete_container,
         open_in_browser,
-        open_container_window
+        open_container_window,
+        setup_native_engine,
+        check_engine_status
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -28,6 +28,8 @@ function App() {
   const [statusMessages, setStatusMessages] = useState<string[]>([]);
   const [runningContainers, setRunningContainers] = useState<RunningContainer[]>([]);
   const [privateContainers, setPrivateContainers] = useState<PrivateContainer[]>([]);
+  const [engineStatus, setEngineStatus] = useState<string | null>(null);
+  const [isSettingUp, setIsSettingUp] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<{
     message: string;
     type: 'success' | 'error' | 'connecting' | 'info';
@@ -42,6 +44,32 @@ function App() {
     setStatusMessages((prev) => [...prev, message]);
   };
 
+  const checkEngine = useCallback(async () => {
+    try {
+      const status = await invoke<string | null>('check_engine_status');
+      setEngineStatus(status);
+    } catch (error) {
+      console.error('Failed to check engine status:', error);
+    }
+  }, []);
+
+  const handleSetupNativeEngine = async () => {
+    setIsSettingUp(true);
+    clearStatusMessages();
+    updateConnectionStatus('Setting up Native Engine...', 'connecting');
+    try {
+      await invoke('setup_native_engine');
+      updateConnectionStatus('Native Engine setup successful!', 'success');
+      await checkEngine();
+    } catch (error) {
+      const errorMessage = typeof error === 'string' ? error : JSON.stringify(error);
+      updateConnectionStatus(`Setup failed: ${errorMessage}`, 'error');
+      addStatusMessage(`[ERROR] ${errorMessage}`);
+    } finally {
+      setIsSettingUp(false);
+    }
+  };
+
   const refreshPrivateContainers = useCallback(async () => {
     try {
       const containers = await invoke<PrivateContainer[]>('list_private_containers');
@@ -53,6 +81,7 @@ function App() {
 
   useEffect(() => {
     refreshPrivateContainers();
+    checkEngine();
 
     let unlisten: () => void;
     
@@ -110,6 +139,29 @@ function App() {
       <Header />
 
       <main className="container mx-auto px-4 pb-12">
+        {!engineStatus && (
+          <div className="mb-8 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-4 animate-pulse">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-amber-500 rounded-full flex items-center justify-center text-amber-900">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-amber-200">No Container Engine Detected</h3>
+                <p className="text-amber-100/70">Docker or Podman was not found. We can set up a minimal native engine for you.</p>
+              </div>
+            </div>
+            <button
+              onClick={handleSetupNativeEngine}
+              disabled={isSettingUp}
+              className="bg-amber-500 hover:bg-amber-400 text-amber-900 font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50"
+            >
+              {isSettingUp ? 'Setting up...' : 'Setup Native Engine'}
+            </button>
+          </div>
+        )}
+
         <ConnectionStatus
           message={connectionStatus.message}
           type={connectionStatus.type}
