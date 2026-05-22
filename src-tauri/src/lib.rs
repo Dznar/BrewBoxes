@@ -73,49 +73,32 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 }
 
 fn detect_engine() -> Result<String, String> {
-    let engines = if cfg!(windows) {
-        vec!["podman.exe", "docker.exe", "lima.exe", "podman", "docker", "lima"]
-    } else {
-        vec!["podman", "docker", "lima"]
-    };
-
-    // Try absolute path search on Windows first to avoid extensionless Linux binaries
     if cfg!(windows) {
+        let engines = vec!["podman.exe", "docker.exe"];
         for engine in &engines {
-            if engine.ends_with(".exe") {
-                let output = StdCommand::new("where").arg(engine).output();
-                if let Ok(out) = output {
-                    if out.status.success() {
-                        for line in String::from_utf8_lossy(&out.stdout).lines() {
-                            let path = line.trim();
-                            if !path.is_empty() && path.to_lowercase().ends_with(".exe") {
-                                log::info!("Detected engine via where (.exe): {}", path);
-                                return Ok(path.to_string());
-                            }
+            let output = StdCommand::new("where").arg(engine).output();
+            if let Ok(out) = output {
+                if out.status.success() {
+                    for line in String::from_utf8_lossy(&out.stdout).lines() {
+                        let path = line.trim();
+                        if !path.is_empty() && path.to_lowercase().ends_with(".exe") {
+                            log::info!("Detected engine via where (.exe): {}", path);
+                            return Ok(path.to_string());
                         }
                     }
                 }
             }
         }
-    }
-
-    // Standard detection (PATH)
-    for engine in engines {
-        if StdCommand::new(engine).arg("--version").output().is_ok() {
-            log::info!("Detected engine via PATH: {}", engine);
-            return Ok(engine.to_string());
-        }
-    }
-
-    Err("No container engine found (podman, docker, or lima)".to_string())
-}
-
-fn get_engine_args(engine: &str, sub_cmd: &str) -> (String, Vec<String>) {
-    let engine_lower = engine.to_lowercase();
-    if engine_lower.contains("lima") {
-        (engine.to_string(), vec!["nerdctl".to_string(), sub_cmd.to_string()])
+        Err("No container engine found (podman.exe or docker.exe). Please ensure Podman or Docker Desktop is installed and in your PATH.".to_string())
     } else {
-        (engine.to_string(), vec![sub_cmd.to_string()])
+        let engines = vec!["podman", "docker"];
+        for engine in engines {
+            if StdCommand::new(engine).arg("--version").output().is_ok() {
+                log::info!("Detected engine via PATH: {}", engine);
+                return Ok(engine.to_string());
+            }
+        }
+        Err("No container engine found (podman or docker).".to_string())
     }
 }
 
@@ -149,11 +132,8 @@ async fn launch_container(
 
     // Check if container already exists (for private persistence)
     if is_private {
-        let (cmd_bin, mut args) = get_engine_args(&engine, "inspect");
-        args.extend(["--format".to_string(), "{{.State.Status}}".to_string(), container_name.clone()]);
-        
-        let inspect = StdCommand::new(&cmd_bin)
-            .args(&args)
+        let inspect = StdCommand::new(&engine)
+            .args(["inspect", "--format", "{{.State.Status}}", &container_name])
             .output();
 
         if let Ok(output) = inspect {
@@ -162,17 +142,12 @@ async fn launch_container(
                 window.emit("progress", serde_json::json!({"type": "status", "message": format!("Found existing session ({}). Starting...", status)})).unwrap();
                 
                 if status != "running" {
-                    let (start_bin, mut start_args) = get_engine_args(&engine, "start");
-                    start_args.push(container_name.clone());
-                    let _ = StdCommand::new(&start_bin).args(&start_args).status();
+                    let _ = StdCommand::new(&engine).args(["start", &container_name]).status();
                 }
 
                 // Get port
-                let (port_bin, mut port_args) = get_engine_args(&engine, "inspect");
-                port_args.extend(["--format".to_string(), "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}".to_string(), container_name.clone()]);
-                
-                let port_output = StdCommand::new(&port_bin)
-                    .args(&port_args)
+                let port_output = StdCommand::new(&engine)
+                    .args(["inspect", "--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name])
                     .output()
                     .map_err(|e| e.to_string())?;
                 
@@ -206,9 +181,8 @@ async fn launch_container(
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Checking engine status ({})...", engine)})).unwrap();
     
     // Check if engine is responsive
-    let (info_bin, info_args) = get_engine_args(&engine, "info");
-    let info = StdCommand::new(&info_bin)
-        .args(&info_args)
+    let info = StdCommand::new(&engine)
+        .arg("info")
         .output();
     
     if info.is_err() || !info.as_ref().unwrap().status.success() {
@@ -217,7 +191,7 @@ async fn launch_container(
         } else {
             "Engine not responsive".to_string()
         };
-        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman/Lima is started. Error: {}", err_msg));
+        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman is started. Error: {}", err_msg));
     }
 
     let image_tag = if distro == "alpine" && gui == "xfce" {
@@ -227,12 +201,8 @@ async fn launch_container(
     };
 
     // Check if image already exists locally to avoid unnecessary pull/build
-    let (img_bin, mut img_args) = get_engine_args(&engine, "images");
-    img_args.push("-q".to_string());
-    img_args.push(image_tag.clone());
-    
-    let image_check = StdCommand::new(&img_bin)
-        .args(&img_args)
+    let image_check = StdCommand::new(&engine)
+        .args(["images", "-q", &image_tag])
         .output();
     
     let needs_pull = if let Ok(output) = image_check {
@@ -243,62 +213,101 @@ async fn launch_container(
 
     if needs_pull {
         window.emit("progress", serde_json::json!({"type": "status", "message": format!("Image not found locally. Pulling {}...", image_tag)})).unwrap();
-        
-        let pty_system = native_pty_system();
-        let pair = pty_system
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
 
-        let (pull_bin, mut pull_args) = get_engine_args(&engine, "pull");
-        pull_args.push(image_tag.clone());
+        if cfg!(windows) {
+            // Windows: Use standard piped command to avoid PTY/TTY handshake hangs with Docker Desktop
+            let mut child = StdCommand::new(&engine)
+                .args(["pull", &image_tag])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Failed to spawn pull: {}", e))?;
 
-        let mut cmd = CommandBuilder::new(&pull_bin);
-        // Force TTY-like behavior and color output
-        cmd.env("TERM", "xterm-256color");
-        cmd.args(&pull_args);
-        
-        log::info!("Spawning pull command: {} {:?}", pull_bin, pull_args);
-        let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
-        drop(pair.slave);
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let window_clone = window.clone();
 
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs..."})).unwrap();
+            window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs (Safe Mode)..."})).unwrap();
 
-        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-        let window_clone = window.clone();
-
-        thread::spawn(move || {
-            let mut buffer = [0u8; 4096]; // Larger buffer for progress chunks
-            log::info!("PTY reader thread started.");
-            while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0 { 
-                    log::info!("PTY reader reached EOF.");
-                    break; 
+            // Handle stdout
+            let window_stdout = window_clone.clone();
+            thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(l) = line {
+                        let _ = window_stdout.emit("progress", serde_json::json!({"type": "progress", "message": format!("{}\n", l)}));
+                    }
                 }
-                let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
-            }
-        });
+            });
 
-        let wait_res = child.wait();
-        log::info!("Pull process exited: {:?}", wait_res);
+            // Handle stderr
+            let window_stderr = window_clone.clone();
+            thread::spawn(move || {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    if let Ok(l) = line {
+                        let _ = window_stderr.emit("progress", serde_json::json!({"type": "progress", "message": format!("{}\n", l)}));
+                    }
+                }
+            });
+
+            let wait_res = child.wait();
+            log::info!("Pull process (StdCommand) exited: {:?}", wait_res);
+        } else {
+            // Linux: Use PTY for rich animated progress bars
+            let pty_system = native_pty_system();
+            let pair = pty_system
+                .openpty(PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| e.to_string())?;
+
+            let mut cmd = CommandBuilder::new(&engine);
+            // Force TTY-like behavior and color output
+            cmd.env("TERM", "xterm-256color");
+            cmd.args(["pull", &image_tag]);
+
+            log::info!("Spawning pull command (PTY): {} pull {}", engine, image_tag);
+            let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
+            drop(pair.slave);
+
+            window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs..."})).unwrap();
+
+            let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+            let window_clone = window.clone();
+
+            thread::spawn(move || {
+                let mut buffer = [0u8; 4096]; // Larger buffer for progress chunks
+                log::info!("PTY reader thread started.");
+                while let Ok(n) = reader.read(&mut buffer) {
+                    if n == 0 { 
+                        log::info!("PTY reader reached EOF.");
+                        break; 
+                    }
+                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
+                }
+            });
+
+            let wait_res = child.wait();
+            log::info!("Pull process (PTY) exited: {:?}", wait_res);
+        }
         window.emit("progress", serde_json::json!({"type": "status", "message": "Pull completed!"})).unwrap();
     } else {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Image found locally. Skipping pull."})).unwrap();
     }
-
     window.emit("progress", serde_json::json!({"type": "status", "message": "Allocating ports..."})).unwrap();
     let fe_port = find_available_port();
     let ws_port = find_available_port();
 
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Starting container using {}...", engine)})).unwrap();
 
-    let (run_bin, mut run_args) = get_engine_args(&engine, "run");
-    run_args.extend(["-d".to_string(), "--name".to_string(), container_name.clone()]);
+    let mut run_args = vec!["run".to_string(), "-d".to_string(), "--name".to_string(), container_name.clone()];
 
     // Only add --rm if NOT private
     if !is_private {
@@ -318,7 +327,7 @@ async fn launch_container(
     run_args.push(format!("{}:8082", ws_port));
     run_args.push(image_tag);
 
-    let output = StdCommand::new(&run_bin)
+    let output = StdCommand::new(&engine)
         .args(run_args)
         .output()
         .map_err(|e| e.to_string())?;
@@ -385,11 +394,8 @@ async fn open_container_window(app: AppHandle, label: String, url: String) -> Re
 #[tauri::command]
 async fn stop_container(id: String) -> Result<(), String> {
     let engine = detect_engine()?;
-    let (cmd_bin, mut args) = get_engine_args(&engine, "stop");
-    args.push(id);
-
-    let status = StdCommand::new(&cmd_bin)
-        .args(&args)
+    let status = StdCommand::new(&engine)
+        .args(["stop", &id])
         .status()
         .map_err(|e| e.to_string())?;
     
@@ -404,17 +410,11 @@ async fn delete_container(app: AppHandle, id: String) -> Result<(), String> {
     let engine = detect_engine()?;
     
     // Stop first
-    let (stop_bin, mut stop_args) = get_engine_args(&engine, "stop");
-    stop_args.push(id.clone());
-    let _ = StdCommand::new(&stop_bin).args(&stop_args).status();
+    let _ = StdCommand::new(&engine).args(["stop", &id]).status();
 
     // Remove
-    let (rm_bin, mut rm_args) = get_engine_args(&engine, "rm");
-    rm_args.push("-f".to_string());
-    rm_args.push(id.clone());
-    
-    let status = StdCommand::new(&rm_bin)
-        .args(&rm_args)
+    let status = StdCommand::new(&engine)
+        .args(["rm", "-f", &id])
         .status()
         .map_err(|e| e.to_string())?;
     
