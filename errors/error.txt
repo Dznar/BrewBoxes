@@ -1,0 +1,186 @@
+BrewBoxes Logo
+BrewBoxes
+Experience the power of Linux distributions directly in your browser. Choose your favorite distro and desktop environment to get started instantly.
+
+Launch failed: Run failed: Error response from daemon: Docker Desktop is unable to start bootstrapping main distribution: running wslexec: An error occurred while running the command. DockerDesktop/Wsl/ExecError: c:\windows\system32\wsl.exe -d docker-desktop -u root -e wsl-bootstrap run --base-image /c/program files/docker/docker/resources/docker-desktop.iso --cli-iso /c/program files/docker/docker/resources/wsl/docker-wsl-cli.iso --data-disk b2e23a75-1b58-b543-a478-e946c464778b: exit status 0xc00000fd (stderr: [2026-05-22T08:45:28.685916600Z][wsl-bootstrap.version][W] failed to read component versions: open /opt/docker-desktop/componentsVersion.json: no such file or directory [2026-05-22T08:45:28.688857300Z][wsl-bootstrap] provisioning data via data disk with id: b2e23a75-1b58-b543-a478-e946c464778b [2026-05-22T08:45:28.689595400Z][wsl-bootstrap] pre-bootstrap complete [2026-05-22T08:45:28.700757000Z][wsl-bootstrap] detected no file system. Formatting [2026-05-22T08:46:31.984715912Z][wsl-bootstrap] no old version pack detected [2026-05-22T08:46:32.002932932Z][wsl-bootstrap] no traceparent to propagate [2026-05-22T08:46:32.003114132Z][wsl-bootstrap] starting linuxkit container with unshare [2026-05-22T08:46:32.003626833Z][wsl-bootstrap] Restoring existing exposed ports from the host [2026-05-22T08:46:32.004313834Z][wsl-bootstrap.ipc] cd505efe-wsl-bootstrap -> /run/host-services/backend.sock BackendAPI [2026-05-22T08:46:32.004596534Z][wsl-bootstrap.ipc] (55f7de8a-0) cd505efe-wsl-bootstrap C->S BackendAPI GET /forwards/list [2026-05-22T08:46:32.005643635Z][wsl-bootstrap.ipc][W] (55f7de8a-0) cd505efe-wsl-bootstrap C<-S ConnectionClosed GET /forwards/list (1.112201ms): Get "http://ipc/forwards/list": dial unix /run/host-services/backend.sock: connect: no such file or directory [2026-05-22T08:46:33.007154702Z][wsl-bootstrap.ipc] (55f7de8a-3) cd505efe-wsl-bootstrap C->S BackendAPI GET /forwards/list [2026-05-22T08:46:33.033423230Z][wsl-bootstrap.ipc] (55f7de8a-3) cd505efe-wsl-bootstrap C<-S b5291e39-BackendAPI GET /forwards/list (26.240428ms): &[] [2026-05-22T08:46:33.033594830Z][wsl-bootstrap] wsl-bootstrap: starting cross-distro routing service [2026-05-22T08:46:33.033699130Z][wsl-bootstrap.ipc] run 5c589c73-cross-distro for component router on /run/guest-services/wsl-cross-distro.sock , stdout: , wslErrorCode: DockerDesktop/Wsl/ExecError) github.com/docker/pinata/common/pkg/errordef.helper.Wrap github.com/docker/pinata/common/pkg/errordef/helper.go:52 github.com/docker/pinata/win/backend/wsl.Config.Run.func3 github.com/docker/pinata/win/backend/wsl/config.go:75 golang.org/x/sync/errgroup.(*Group).Go.func1 golang.org/x/sync@v0.20.0/errgroup/errgroup.go:93 runtime.goexit runtime/asm_amd64.s:1771
+[INFO] Checking engine status (C:\Program Files\Docker\Docker\resources\bin\docker.exe)...
+[INFO] Image not found locally. Pulling lscr.io/linuxserver/webtop:latest...
+[INFO] Streaming pull logs (Safe Mode)...
+latest: Pulling from linuxserver/webtop
+f6a4c3e338ed: Pulling fs layer
+77a428f20099: Pulling fs layer
+bf2782fc845a: Pulling fs layer
+3a8f66b19242: Pulling fs layer
+61e3586102ba: Pulling fs layer
+35a16c8f112b: Pulling fs layer
+5100dd43eac9: Pulling fs layer
+5a43251cdda7: Pulling fs layer
+f90e7d34ce1d: Pulling fs layer
+d321ee996231: Pulling fs layer
+44f32c80caf6: Pulling fs layer
+f530eff1cd4c: Pulling fs layer
+4b01382215ee: Pulling fs layer
+8d2c7912f7e7: Pulling fs layer
+cfc4d5428195: Pulling fs layer
+5a40f50dc486: Download complete
+bf2782fc845a: Download complete
+3a8f66b19242: Download complete
+77a428f20099: Download complete
+61e3586102ba: Download complete
+f6a4c3e338ed: Download complete
+f90e7d34ce1d: Download complete
+44f32c80caf6: Download complete
+35a16c8f112b: Download complete
+5100dd43eac9: Download complete
+4b01382215ee: Download complete
+5a43251cdda7: Download complete
+ea707ad01e64: Download complete
+8d2c7912f7e7: Download complete
+3a8f66b19242: Pull complete
+f6a4c3e338ed: Pull complete
+8d2c7912f7e7: Pull complete
+44f32c80caf6: Pull complete
+35a16c8f112b: Pull complete
+f530eff1cd4c: Download complete
+5100dd43eac9: Pull complete
+f530eff1cd4c: Pull complete
+d321ee996231: Download complete
+cfc4d5428195: Download complete
+cfc4d5428195: Pull complete
+77a428f20099: Pull complete
+61e3586102ba: Pull complete
+4b01382215ee: Pull complete
+5a43251cdda7: Pull complete
+f90e7d34ce1d: Pull complete
+unexpected EOF
+[INFO] Pull completed!
+[INFO] Allocating ports...
+[INFO] Starting container using C:\Program Files\Docker\Docker\resources\bin\docker.exe...
+[ERROR] Run failed: Error response from daemon: Docker Desktop is unable to start
+bootstrapping main distribution: running wslexec: An error occurred while running the command. DockerDesktop/Wsl/ExecError: c:\windows\system32\wsl.exe -d docker-desktop -u root -e wsl-bootstrap run --base-image /c/program files/docker/docker/resources/docker-desktop.iso --cli-iso /c/program files/docker/docker/resources/wsl/docker-wsl-cli.iso --data-disk b2e23a75-1b58-b543-a478-e946c464778b: exit status 0xc00000fd (stderr: [2026-05-22T08:45:28.685916600Z][wsl-bootstrap.version][W] failed to read component versions: open /opt/docker-desktop/componentsVersion.json: no such file or directory
+[2026-05-22T08:45:28.688857300Z][wsl-bootstrap] provisioning data via data disk with id: b2e23a75-1b58-b543-a478-e946c464778b
+[2026-05-22T08:45:28.689595400Z][wsl-bootstrap] pre-bootstrap complete
+[2026-05-22T08:45:28.700757000Z][wsl-bootstrap] detected no file system. Formatting
+[2026-05-22T08:46:31.984715912Z][wsl-bootstrap] no old version pack detected
+[2026-05-22T08:46:32.002932932Z][wsl-bootstrap] no traceparent to propagate
+[2026-05-22T08:46:32.003114132Z][wsl-bootstrap] starting linuxkit container with unshare
+[2026-05-22T08:46:32.003626833Z][wsl-bootstrap] Restoring existing exposed ports from the host
+[2026-05-22T08:46:32.004313834Z][wsl-bootstrap.ipc] cd505efe-wsl-bootstrap -> /run/host-services/backend.sock BackendAPI
+[2026-05-22T08:46:32.004596534Z][wsl-bootstrap.ipc] (55f7de8a-0) cd505efe-wsl-bootstrap C->S BackendAPI GET /forwards/list
+[2026-05-22T08:46:32.005643635Z][wsl-bootstrap.ipc][W] (55f7de8a-0) cd505efe-wsl-bootstrap C<-S ConnectionClosed GET /forwards/list (1.112201ms): Get "http://ipc/forwards/list": dial unix /run/host-services/backend.sock: connect: no such file or directory
+[2026-05-22T08:46:33.007154702Z][wsl-bootstrap.ipc] (55f7de8a-3) cd505efe-wsl-bootstrap C->S BackendAPI GET /forwards/list
+[2026-05-22T08:46:33.033423230Z][wsl-bootstrap.ipc] (55f7de8a-3) cd505efe-wsl-bootstrap C<-S b5291e39-BackendAPI GET /forwards/list (26.240428ms): &[]
+[2026-05-22T08:46:33.033594830Z][wsl-bootstrap] wsl-bootstrap: starting cross-distro routing service
+[2026-05-22T08:46:33.033699130Z][wsl-bootstrap.ipc] run 5c589c73-cross-distro for component router on /run/guest-services/wsl-cross-distro.sock
+, stdout: , wslErrorCode: DockerDesktop/Wsl/ExecError)
+github.com/docker/pinata/common/pkg/errordef.helper.Wrap
+	github.com/docker/pinata/common/pkg/errordef/helper.go:52
+github.com/docker/pinata/win/backend/wsl.Config.Run.func3
+	github.com/docker/pinata/win/backend/wsl/config.go:75
+golang.org/x/sync/errgroup.(*Group).Go.func1
+	golang.org/x/sync@v0.20.0/errgroup/errgroup.go:93
+runtime.goexit
+	runtime/asm_amd64.s:1771
+U
+Ubuntu
+World's most popular Linux desktop
+
+Available Desktop Environments:
+
+i3
+Tiling window manager
+
+KDE Plasma
+Modern and customizable
+
+MATE
+Traditional desktop
+
+XFCE
+Lightweight and fast
+Select GUI FirstSelect GUI First
+F
+Fedora
+Innovation first, cutting-edge
+
+Available Desktop Environments:
+
+i3
+Tiling window manager
+
+KDE Plasma
+Modern and customizable
+
+MATE
+Traditional desktop
+
+XFCE
+Lightweight and fast
+Select GUI FirstSelect GUI First
+D
+Debian
+The universal operating system
+
+Available Desktop Environments:
+
+i3
+Tiling window manager
+
+KDE Plasma
+Modern and customizable
+
+MATE
+Traditional desktop
+
+XFCE
+Lightweight and fast
+Select GUI FirstSelect GUI First
+A
+Arch Linux
+Rolling release, advanced users
+
+Available Desktop Environments:
+
+i3
+Tiling window manager
+
+KDE Plasma
+Modern and customizable
+
+MATE
+Traditional desktop
+
+XFCE
+Lightweight and fast
+Select GUI FirstSelect GUI First
+A
+Alpine Linux
+Security-focused, lightweight
+
+Available Desktop Environments:
+
+i3
+Tiling window manager
+
+MATE
+Traditional desktop
+
+XFCE
+Lightweight and fast
+Launch Alpine Linux with XFCELaunch Private Container
+O
+openSUSE
+Enterprise-grade stability
+
+Available Desktop Environments:
+
+i3
+Tiling window manager
+
+MATE
+Traditional desktop
+
+XFCE
+Lightweight and fast
+Select GUI FirstSelect GUI First
+© 2026 BrewBoxes. Experience Linux distributions in your browser.

@@ -1,4 +1,6 @@
 use std::process::Command as StdCommand;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder, Window, Emitter, Manager};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -65,6 +67,8 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 
     while start.elapsed() < timeout {
         if TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_ok() {
+            // Found port, but give it 2 seconds to actually start responding (avoid ERR_EMPTY_RESPONSE)
+            thread::sleep(Duration::from_secs(2));
             return true;
         }
         thread::sleep(Duration::from_millis(200));
@@ -76,7 +80,12 @@ fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
         let engines = vec!["podman.exe", "docker.exe"];
         for engine in &engines {
-            let output = StdCommand::new("where").arg(engine).output();
+            let mut cmd = StdCommand::new("where");
+            cmd.arg(engine);
+            #[cfg(windows)]
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            
+            let output = cmd.output();
             if let Ok(out) = output {
                 if out.status.success() {
                     for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -132,9 +141,11 @@ async fn launch_container(
 
     // Check if container already exists (for private persistence)
     if is_private {
-        let inspect = StdCommand::new(&engine)
-            .args(["inspect", "--format", "{{.State.Status}}", &container_name])
-            .output();
+        let mut inspect_cmd = StdCommand::new(&engine);
+        inspect_cmd.args(["inspect", "--format", "{{.State.Status}}", &container_name]);
+        #[cfg(windows)]
+        inspect_cmd.creation_flags(0x08000000);
+        let inspect = inspect_cmd.output();
 
         if let Ok(output) = inspect {
             if output.status.success() {
@@ -142,13 +153,19 @@ async fn launch_container(
                 window.emit("progress", serde_json::json!({"type": "status", "message": format!("Found existing session ({}). Starting...", status)})).unwrap();
                 
                 if status != "running" {
-                    let _ = StdCommand::new(&engine).args(["start", &container_name]).status();
+                    let mut start_cmd = StdCommand::new(&engine);
+                    start_cmd.args(["start", &container_name]);
+                    #[cfg(windows)]
+                    start_cmd.creation_flags(0x08000000);
+                    let _ = start_cmd.status();
                 }
 
                 // Get port
-                let port_output = StdCommand::new(&engine)
-                    .args(["inspect", "--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name])
-                    .output()
+                let mut port_cmd = StdCommand::new(&engine);
+                port_cmd.args(["inspect", "--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name]);
+                #[cfg(windows)]
+                port_cmd.creation_flags(0x08000000);
+                let port_output = port_cmd.output()
                     .map_err(|e| e.to_string())?;
                 
                 let port_str = String::from_utf8_lossy(&port_output.stdout).trim().to_string();
@@ -181,9 +198,11 @@ async fn launch_container(
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Checking engine status ({})...", engine)})).unwrap();
     
     // Check if engine is responsive
-    let info = StdCommand::new(&engine)
-        .arg("info")
-        .output();
+    let mut info_cmd = StdCommand::new(&engine);
+    info_cmd.arg("info");
+    #[cfg(windows)]
+    info_cmd.creation_flags(0x08000000);
+    let info = info_cmd.output();
     
     if info.is_err() || !info.as_ref().unwrap().status.success() {
         let err_msg = if let Ok(out) = info {
@@ -201,9 +220,11 @@ async fn launch_container(
     };
 
     // Check if image already exists locally to avoid unnecessary pull/build
-    let image_check = StdCommand::new(&engine)
-        .args(["images", "-q", &image_tag])
-        .output();
+    let mut img_cmd = StdCommand::new(&engine);
+    img_cmd.args(["images", "-q", &image_tag]);
+    #[cfg(windows)]
+    img_cmd.creation_flags(0x08000000);
+    let image_check = img_cmd.output();
     
     let needs_pull = if let Ok(output) = image_check {
         String::from_utf8_lossy(&output.stdout).trim().is_empty()
@@ -216,11 +237,14 @@ async fn launch_container(
 
         if cfg!(windows) {
             // Windows: Use standard piped command to avoid PTY/TTY handshake hangs with Docker Desktop
-            let mut child = StdCommand::new(&engine)
-                .args(["pull", &image_tag])
+            let mut pull_cmd = StdCommand::new(&engine);
+            pull_cmd.args(["pull", &image_tag])
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
+                .stderr(std::process::Stdio::piped());
+            #[cfg(windows)]
+            pull_cmd.creation_flags(0x08000000);
+            
+            let mut child = pull_cmd.spawn()
                 .map_err(|e| format!("Failed to spawn pull: {}", e))?;
 
             let stdout = child.stdout.take().unwrap();
@@ -327,9 +351,12 @@ async fn launch_container(
     run_args.push(format!("{}:8082", ws_port));
     run_args.push(image_tag);
 
-    let output = StdCommand::new(&engine)
-        .args(run_args)
-        .output()
+    let mut run_cmd = StdCommand::new(&engine);
+    run_cmd.args(run_args);
+    #[cfg(windows)]
+    run_cmd.creation_flags(0x08000000);
+
+    let output = run_cmd.output()
         .map_err(|e| e.to_string())?;
 
     if !output.status.success() {
@@ -394,9 +421,12 @@ async fn open_container_window(app: AppHandle, label: String, url: String) -> Re
 #[tauri::command]
 async fn stop_container(id: String) -> Result<(), String> {
     let engine = detect_engine()?;
-    let status = StdCommand::new(&engine)
-        .args(["stop", &id])
-        .status()
+    let mut cmd = StdCommand::new(&engine);
+    cmd.args(["stop", &id]);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    
+    let status = cmd.status()
         .map_err(|e| e.to_string())?;
     
     if !status.success() {
@@ -410,12 +440,19 @@ async fn delete_container(app: AppHandle, id: String) -> Result<(), String> {
     let engine = detect_engine()?;
     
     // Stop first
-    let _ = StdCommand::new(&engine).args(["stop", &id]).status();
+    let mut stop_cmd = StdCommand::new(&engine);
+    stop_cmd.args(["stop", &id]);
+    #[cfg(windows)]
+    stop_cmd.creation_flags(0x08000000);
+    let _ = stop_cmd.status();
 
     // Remove
-    let status = StdCommand::new(&engine)
-        .args(["rm", "-f", &id])
-        .status()
+    let mut rm_cmd = StdCommand::new(&engine);
+    rm_cmd.args(["rm", "-f", &id]);
+    #[cfg(windows)]
+    rm_cmd.creation_flags(0x08000000);
+    
+    let status = rm_cmd.status()
         .map_err(|e| e.to_string())?;
     
     if !status.success() {
