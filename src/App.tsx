@@ -134,31 +134,91 @@ function App() {
     refreshPrivateContainers();
   };
 
+  const [debugOutput, setDebugOutput] = useState<string | null>(null);
+
+  const handleResetEngine = async () => {
+    if (confirm('Are you sure you want to reset the Native Engine? This will delete all local images and data.')) {
+      updateConnectionStatus('Resetting Native Engine...', 'connecting');
+      try {
+        await invoke('reset_native_engine');
+        updateConnectionStatus('Engine reset successful!', 'success');
+        setEngineStatus(null);
+      } catch (error) {
+        updateConnectionStatus('Reset failed', 'error');
+      }
+    }
+  };
+
+  const handleDebugEngine = async () => {
+    try {
+      const debug = await invoke<string>('debug_native_engine');
+      setDebugOutput(debug);
+    } catch (error) {
+      setDebugOutput(`Debug failed: ${error}`);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white font-inter">
       <Header />
 
       <main className="container mx-auto px-4 pb-12">
-        {!engineStatus && (
-          <div className="mb-8 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-4 animate-pulse">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-amber-500 rounded-full flex items-center justify-center text-amber-900">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-amber-200">No Container Engine Detected</h3>
-                <p className="text-amber-100/70">Docker or Podman was not found. We can set up a minimal native engine for you.</p>
-              </div>
+        <div className="mb-8 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-6 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 ${engineStatus ? 'bg-green-500 text-green-900' : 'bg-amber-500 text-amber-900'} rounded-full flex items-center justify-center`}>
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
             </div>
-            <button
-              onClick={handleSetupNativeEngine}
-              disabled={isSettingUp}
-              className="bg-amber-500 hover:bg-amber-400 text-amber-900 font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50"
+            <div>
+              <h3 className="text-xl font-bold text-amber-200">
+                {engineStatus ? 'Native Engine Active' : 'Native Engine Not Ready'}
+              </h3>
+              <p className="text-amber-100/70">
+                {engineStatus 
+                  ? 'The stable container engine is ready to use.' 
+                  : 'Docker/Podman are disabled on Windows. Please set up the reliable Native Engine.'}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            {!engineStatus ? (
+              <button
+                onClick={handleSetupNativeEngine}
+                disabled={isSettingUp}
+                className="bg-amber-500 hover:bg-amber-400 text-amber-900 font-bold py-3 px-8 rounded-xl transition-all disabled:opacity-50"
+              >
+                {isSettingUp ? 'Setting up...' : 'Setup Native Engine'}
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={handleDebugEngine}
+                  className="bg-gray-700 hover:bg-gray-600 text-white font-medium py-2 px-6 rounded-xl transition-all"
+                >
+                  Debug
+                </button>
+                <button
+                  onClick={handleResetEngine}
+                  className="bg-red-900/50 hover:bg-red-800/50 text-red-200 font-medium py-2 px-6 rounded-xl border border-red-500/30 transition-all"
+                >
+                  Reset
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {debugOutput && (
+          <div className="mb-8 bg-black/80 rounded-2xl p-6 border border-blue-500/30 font-mono text-xs overflow-auto max-h-96 relative">
+            <button 
+              onClick={() => setDebugOutput(null)}
+              className="absolute top-4 right-4 text-gray-500 hover:text-white"
             >
-              {isSettingUp ? 'Setting up...' : 'Setup Native Engine'}
+              ✕ Close
             </button>
+            <h4 className="text-blue-400 mb-4 uppercase text-[10px] tracking-widest">Engine Diagnostics</h4>
+            <pre className="text-blue-100">{debugOutput}</pre>
           </div>
         )}
 

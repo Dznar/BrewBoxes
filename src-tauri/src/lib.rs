@@ -129,15 +129,60 @@ fn detect_engine() -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+async fn reset_native_engine(app: AppHandle) -> Result<(), String> {
+    if !cfg!(windows) { return Err("Only on Windows".to_string()); }
+    let mut unregister = StdCommand::new("wsl");
+    unregister.args(["--unregister", "brewboxes-engine"]);
+    #[cfg(windows)]
+    unregister.creation_flags(0x08000000);
+    let _ = unregister.status();
+    
+    // Also clear engine dir
+    let engine_dir = get_engine_dir(&app);
+    let _ = fs::remove_dir_all(&engine_dir);
+    Ok(())
+}
+
+#[tauri::command]
+async fn debug_native_engine() -> Result<String, String> {
+    if !cfg!(windows) { return Err("Only on Windows".to_string()); }
+    
+    let diag_script = r#"
+        echo "--- OS VERSION ---"
+        cat /etc/alpine-release 2>/dev/null || echo "N/A"
+        echo "--- BINARIES ---"
+        ls -l /usr/local/bin/nerdctl /usr/local/bin/containerd /usr/local/bin/runc 2>/dev/null || echo "Some binaries missing"
+        echo "--- PROCESSES ---"
+        ps aux | grep -E "containerd|nerdctl" | grep -v grep
+        echo "--- SOCKET ---"
+        ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
+        echo "--- LOGS ---"
+        tail -n 20 /var/log/containerd.log 2>/dev/null || echo "No logs found"
+        echo "--- DEPENDENCIES ---"
+        ldd /usr/local/bin/nerdctl 2>/dev/null || echo "ldd failed"
+    "#;
+
+    let mut cmd = StdCommand::new("wsl");
+    cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", diag_script]);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000);
+    
+    let output = cmd.output().map_err(|e| e.to_string())?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
         // Robust containerd startup and socket check
         let start_script = r#"
             mkdir -p /run/containerd
             if ! pgrep containerd > /dev/null; then
+                # Ensure we have a log file we can write to
+                touch /var/log/containerd.log
                 /usr/local/bin/containerd > /var/log/containerd.log 2>&1 &
-                # Wait up to 5 seconds for the socket to appear
-                for i in $(seq 1 25); do
+                # Wait up to 10 seconds for the socket to appear
+                for i in $(seq 1 50); do
                     [ -S /run/containerd/containerd.sock ] && break
                     sleep 0.2
                 done
@@ -230,9 +275,9 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     let remaining_path = win_tar_path[3..].replace("\\", "/");
     let wsl_tar_path = format!("/mnt/{}/{}", drive_letter, remaining_path);
     
-    // Extract nerdctl AND install compatibility layer for glibc binaries on Alpine
+    // Use gcompat + libc6-compat for maximum binary compatibility on Alpine
     let extract_script = format!(
-        "apk add --no-cache libc6-compat libgcc && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        "apk add --no-cache libc6-compat libgcc gcompat && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
         wsl_tar_path
     );
     
@@ -293,11 +338,7 @@ async fn launch_container(
                 }
 
                 // Get port
-                let format_arg = if engine == "native" {
-                    "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}"
-                } else {
-                    "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}"
-                };
+                let format_arg = "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}";
 
                 let mut port_cmd = run_engine_cmd(&engine, vec!["inspect", "--format", format_arg, &container_name], Some(&window));
                 let port_output = port_cmd.output()
@@ -623,7 +664,9 @@ pub fn run() {
         open_in_browser,
         open_container_window,
         setup_native_engine,
-        check_engine_status
+        check_engine_status,
+        reset_native_engine,
+        debug_native_engine
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
