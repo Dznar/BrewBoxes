@@ -118,6 +118,36 @@ fn detect_engine() -> Result<String, String> {
     }
 }
 
+fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
+    if engine == "native" {
+        let mut cmd = StdCommand::new("wsl");
+        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--"];
+        
+        // Ensure containerd is running for native engine
+        // We ensure /run/containerd exists and start the daemon if not running
+        let start_script = "mkdir -p /run/containerd && (pgrep containerd > /dev/null || (containerd > /var/log/containerd.log 2>&1 &)) && sleep 1";
+        
+        let mut start_containerd = StdCommand::new("wsl");
+        start_containerd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
+        #[cfg(windows)]
+        start_containerd.creation_flags(0x08000000);
+        let _ = start_containerd.status();
+
+        wsl_args.push("/usr/local/bin/nerdctl"); // Use absolute path
+        wsl_args.extend(args);
+        cmd.args(wsl_args);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        cmd
+    } else {
+        let mut cmd = StdCommand::new(engine);
+        cmd.args(args);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        cmd
+    }
+}
+
 #[tauri::command]
 async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), String> {
     if !cfg!(windows) {
@@ -177,50 +207,28 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     // 4. Extract Nerdctl inside distro
     window.emit("progress", serde_json::json!({"type": "status", "message": "Initializing container runtime inside engine..."})).unwrap();
     
-    // Convert Windows paths to WSL paths (C:\foo -> /mnt/c/foo) and quote them
     let win_tar_path = nerdctl_tar.to_str().unwrap();
     let drive_letter = &win_tar_path[0..1].to_lowercase();
     let remaining_path = win_tar_path[3..].replace("\\", "/");
     let wsl_tar_path = format!("/mnt/{}/{}", drive_letter, remaining_path);
     
-    let extract_script = format!("mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", wsl_tar_path);
+    // Extract nerdctl AND install compatibility layer for glibc binaries on Alpine
+    let extract_script = format!(
+        "apk add --no-cache libc6-compat && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        wsl_tar_path
+    );
     
     let mut extract = StdCommand::new("wsl");
     extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &extract_script]);
     #[cfg(windows)]
     extract.creation_flags(0x08000000);
     let status = extract.status().map_err(|e| format!("Failed to extract nerdctl: {}", e))?;
-    if !status.success() { return Err("Failed to initialize container runtime inside WSL.".to_string()); }
+    if !status.success() { 
+        return Err("Failed to initialize container runtime inside WSL. This can happen if the path contains special characters or if WSL is busy.".to_string()); 
+    }
 
     window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete!"})).unwrap();
     Ok(())
-}
-
-fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
-    if engine == "native" {
-        let mut cmd = StdCommand::new("wsl");
-        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--"];
-        
-        // Ensure containerd is running for native engine
-        let mut start_containerd = StdCommand::new("wsl");
-        start_containerd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", "pgrep containerd || (containerd > /dev/null 2>&1 &)"]);
-        #[cfg(windows)]
-        start_containerd.creation_flags(0x08000000);
-        let _ = start_containerd.status();
-
-        wsl_args.push("nerdctl");
-        wsl_args.extend(args);
-        cmd.args(wsl_args);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        cmd
-    } else {
-        let mut cmd = StdCommand::new(engine);
-        cmd.args(args);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        cmd
-    }
 }
 
 #[tauri::command]
