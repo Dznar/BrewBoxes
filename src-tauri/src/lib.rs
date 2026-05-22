@@ -150,7 +150,7 @@ async fn launch_container(
     // Check if container already exists (for private persistence)
     if is_private {
         let (cmd_bin, mut args) = get_engine_args(&engine, "inspect");
-        args.extend(["--format", "{{.State.Status}}", &container_name]);
+        args.extend(["--format".to_string(), "{{.State.Status}}".to_string(), container_name.clone()]);
         
         let inspect = StdCommand::new(&cmd_bin)
             .args(&args)
@@ -169,7 +169,7 @@ async fn launch_container(
 
                 // Get port
                 let (port_bin, mut port_args) = get_engine_args(&engine, "inspect");
-                port_args.extend(["--format", "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}", &container_name]);
+                port_args.extend(["--format".to_string(), "{{(index (index .NetworkSettings.Ports \"3000/tcp\") 0).HostPort}}".to_string(), container_name.clone()]);
                 
                 let port_output = StdCommand::new(&port_bin)
                     .args(&port_args)
@@ -228,7 +228,8 @@ async fn launch_container(
 
     // Check if image already exists locally to avoid unnecessary pull/build
     let (img_bin, mut img_args) = get_engine_args(&engine, "images");
-    img_args.extend(["-q", &image_tag]);
+    img_args.push("-q".to_string());
+    img_args.push(image_tag.clone());
     
     let image_check = StdCommand::new(&img_bin)
         .args(&img_args)
@@ -409,7 +410,8 @@ async fn delete_container(app: AppHandle, id: String) -> Result<(), String> {
 
     // Remove
     let (rm_bin, mut rm_args) = get_engine_args(&engine, "rm");
-    rm_args.extend(["-f", &id]);
+    rm_args.push("-f".to_string());
+    rm_args.push(id.clone());
     
     let status = StdCommand::new(&rm_bin)
         .args(&rm_args)
