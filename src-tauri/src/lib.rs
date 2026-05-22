@@ -159,6 +159,14 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
 
     // 3. Import WSL Distro
     window.emit("progress", serde_json::json!({"type": "status", "message": "Importing BrewBoxes Engine into WSL..."})).unwrap();
+    
+    // Unregister first if exists to allow clean re-setup
+    let mut unregister = StdCommand::new("wsl");
+    unregister.args(["--unregister", "brewboxes-engine"]);
+    #[cfg(windows)]
+    unregister.creation_flags(0x08000000);
+    let _ = unregister.status();
+
     let mut import = StdCommand::new("wsl");
     import.args(["--import", "brewboxes-engine", install_dir.to_str().unwrap(), rootfs_tar.to_str().unwrap(), "--version", "2"]);
     #[cfg(windows)]
@@ -169,11 +177,16 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     // 4. Extract Nerdctl inside distro
     window.emit("progress", serde_json::json!({"type": "status", "message": "Initializing container runtime inside engine..."})).unwrap();
     
-    // Convert Windows paths to WSL paths (C:\foo -> /mnt/c/foo)
-    let wsl_tar_path = format!("/mnt/{}", nerdctl_tar.to_str().unwrap().replace(":", "").replace("\\", "/").to_lowercase());
+    // Convert Windows paths to WSL paths (C:\foo -> /mnt/c/foo) and quote them
+    let win_tar_path = nerdctl_tar.to_str().unwrap();
+    let drive_letter = &win_tar_path[0..1].to_lowercase();
+    let remaining_path = win_tar_path[3..].replace("\\", "/");
+    let wsl_tar_path = format!("/mnt/{}/{}", drive_letter, remaining_path);
+    
+    let extract_script = format!("mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", wsl_tar_path);
     
     let mut extract = StdCommand::new("wsl");
-    extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &format!("mkdir -p /usr/local/bin && tar -C /usr/local -xzvf {}", wsl_tar_path)]);
+    extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &extract_script]);
     #[cfg(windows)]
     extract.creation_flags(0x08000000);
     let status = extract.status().map_err(|e| format!("Failed to extract nerdctl: {}", e))?;
@@ -183,19 +196,19 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     Ok(())
 }
 
-fn run_engine_cmd(engine: &str, args: Vec<&str>, window: Option<&Window>) -> StdCommand {
+fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--"];
         
         // Ensure containerd is running for native engine
-        // We run it in background if not already running
         let mut start_containerd = StdCommand::new("wsl");
         start_containerd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", "pgrep containerd || (containerd > /dev/null 2>&1 &)"]);
         #[cfg(windows)]
         start_containerd.creation_flags(0x08000000);
         let _ = start_containerd.status();
 
+        wsl_args.push("nerdctl");
         wsl_args.extend(args);
         cmd.args(wsl_args);
         #[cfg(windows)]
