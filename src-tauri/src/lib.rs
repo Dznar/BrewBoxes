@@ -73,8 +73,15 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 }
 
 fn detect_engine() -> Result<String, String> {
+    // Try standard detection (PATH) first - more robust for shims on Windows
+    for engine in ["podman", "docker"] {
+        if StdCommand::new(engine).arg("--version").output().is_ok() {
+            return Ok(engine.to_string());
+        }
+    }
+
     if cfg!(windows) {
-        // On Windows, use 'where' to find the absolute path
+        // Fallback to absolute path search on Windows
         for engine in ["podman.exe", "docker.exe"] {
             let output = StdCommand::new("where").arg(engine).output();
             if let Ok(out) = output {
@@ -85,13 +92,6 @@ fn detect_engine() -> Result<String, String> {
                     }
                 }
             }
-        }
-    }
-
-    // Standard detection/fallback
-    for engine in ["podman", "docker"] {
-        if StdCommand::new(engine).arg("--version").output().is_ok() {
-            return Ok(engine.to_string());
         }
     }
 
@@ -221,9 +221,11 @@ async fn launch_container(
             .map_err(|e| e.to_string())?;
 
         let mut cmd = CommandBuilder::new(&engine);
-        // On Windows, pull output is often better than build output for progress
+        // Force TTY-like behavior and color output
+        cmd.env("TERM", "xterm-256color");
         cmd.args(["pull", &image_tag]);
         
+        log::info!("Spawning pull command: {} pull {}", engine, image_tag);
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
         drop(pair.slave);
 
@@ -233,15 +235,20 @@ async fn launch_container(
         let window_clone = window.clone();
 
         thread::spawn(move || {
-            let mut buffer = [0u8; 1024];
+            let mut buffer = [0u8; 4096]; // Larger buffer for progress chunks
+            log::info!("PTY reader thread started.");
             while let Ok(n) = reader.read(&mut buffer) {
-                if n == 0 { break; }
+                if n == 0 { 
+                    log::info!("PTY reader reached EOF.");
+                    break; 
+                }
                 let output = String::from_utf8_lossy(&buffer[..n]).to_string();
                 let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
             }
         });
 
-        let _ = child.wait().map_err(|e| e.to_string())?;
+        let wait_res = child.wait();
+        log::info!("Pull process exited: {:?}", wait_res);
         window.emit("progress", serde_json::json!({"type": "status", "message": "Pull completed!"})).unwrap();
     } else {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Image found locally. Skipping pull."})).unwrap();
