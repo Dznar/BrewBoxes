@@ -67,8 +67,9 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 
     while start.elapsed() < timeout {
         if TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_ok() {
-            // Found port, but give it 2 seconds to actually start responding (avoid ERR_EMPTY_RESPONSE)
-            thread::sleep(Duration::from_secs(2));
+            // Found port, but give it 5 seconds to actually start responding (avoid ERR_EMPTY_RESPONSE)
+            // Heavy distros like Arch can take a moment to initialize the web server
+            thread::sleep(Duration::from_secs(5));
             return true;
         }
         thread::sleep(Duration::from_millis(200));
@@ -172,7 +173,7 @@ async fn launch_container(
                 let fe_port: u16 = port_str.parse().map_err(|_| "Failed to parse host port".to_string())?;
                 let url = format!("http://localhost:{}", fe_port);
 
-                if !wait_for_port(fe_port, 15) {
+                if !wait_for_port(fe_port, 30) {
                     return Err("Timed out waiting for container web interface to resume.".to_string());
                 }
 
@@ -277,8 +278,12 @@ async fn launch_container(
                 }
             });
 
-            let wait_res = child.wait();
+            let wait_res = child.wait().map_err(|e| format!("Failed to wait for pull: {}", e))?;
             log::info!("Pull process (StdCommand) exited: {:?}", wait_res);
+            
+            if !wait_res.success() {
+                return Err("Image pull failed. This usually happens if the container engine (Docker/Podman) crashes or loses its connection. Please try again.".to_string());
+            }
         } else {
             // Linux: Use PTY for rich animated progress bars
             let pty_system = native_pty_system();
@@ -318,8 +323,12 @@ async fn launch_container(
                 }
             });
 
-            let wait_res = child.wait();
+            let wait_res = child.wait().map_err(|e| format!("Failed to wait for pull: {}", e))?;
             log::info!("Pull process (PTY) exited: {:?}", wait_res);
+
+            if !wait_res.success() {
+                return Err("Image pull failed.".to_string());
+            }
         }
         window.emit("progress", serde_json::json!({"type": "status", "message": "Pull completed!"})).unwrap();
     } else {
@@ -368,7 +377,7 @@ async fn launch_container(
     let url = format!("http://localhost:{}", fe_port);
 
     window.emit("progress", serde_json::json!({"type": "status", "message": "Waiting for web interface..."})).unwrap();
-    if !wait_for_port(fe_port, 15) {
+    if !wait_for_port(fe_port, 30) {
         return Err("Timed out waiting for container web interface to start.".to_string());
     }
 

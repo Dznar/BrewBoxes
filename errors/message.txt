@@ -1,0 +1,22 @@
+There was a problem with WSL
+An error occurred while running a WSL command. Please check your WSL configuration and try again.
+
+running wslexec: An error occurred while running the command. DockerDesktop/Wsl/ExecError: c:\windows\system32\wsl.exe -d docker-desktop -u root -e wsl-bootstrap run --base-image /c/program files/docker/docker/resources/docker-desktop.iso --cli-iso /c/program files/docker/docker/resources/wsl/docker-wsl-cli.iso --data-disk b2e23a75-1b58-b543-a478-e946c464778b: exit status 0xc00000fd (stderr: [2026-05-22T16:21:47.680689400Z][wsl-bootstrap.version][W] failed to read component versions: open /opt/docker-desktop/componentsVersion.json: no such file or directory
+[2026-05-22T16:21:47.685596300Z][wsl-bootstrap] provisioning data via data disk with id: b2e23a75-1b58-b543-a478-e946c464778b
+[2026-05-22T16:21:47.686301400Z][wsl-bootstrap] pre-bootstrap complete
+[2026-05-22T16:21:47.712240000Z][wsl-bootstrap] detected existing ext4 file system
+[2026-05-22T16:21:48.954415000Z][wsl-bootstrap.isocache] docker-wsl-cli.iso is present in the cache
+[2026-05-22T16:21:48.986158700Z][wsl-bootstrap.isocache] docker-desktop.iso is present in the cache
+[2026-05-22T16:21:49.006556500Z][wsl-bootstrap] no old version pack detected
+[2026-05-22T16:21:49.014737100Z][wsl-bootstrap] no traceparent to propagate
+[2026-05-22T16:21:49.014814700Z][wsl-bootstrap] Restoring existing exposed ports from the host
+[2026-05-22T16:21:49.014869500Z][wsl-bootstrap] starting linuxkit container with unshare
+[2026-05-22T16:21:49.015335200Z][wsl-bootstrap.ipc] 85688863-wsl-bootstrap -> /run/host-services/backend.sock BackendAPI
+[2026-05-22T16:21:49.015459400Z][wsl-bootstrap.ipc] (4ccad992-0) 85688863-wsl-bootstrap C->S BackendAPI GET /forwards/list
+[2026-05-22T16:21:49.017748900Z][wsl-bootstrap.ipc][W] (4ccad992-0) 85688863-wsl-bootstrap C<-S ConnectionClosed GET /forwards/list (2.2614ms): Get "http://ipc/forwards/list": dial unix /run/host-services/backend.sock: connect: no such file or directory
+[2026-05-22T16:21:50.018287100Z][wsl-bootstrap.ipc] (4ccad992-3) 85688863-wsl-bootstrap C->S BackendAPI GET /forwards/list
+[2026-05-22T16:21:50.025279400Z][wsl-bootstrap.ipc] (4ccad992-3) 85688863-wsl-bootstrap C<-S b5291e39-BackendAPI GET /forwards/list (6.9901ms): &[]
+[2026-05-22T16:21:50.025454800Z][wsl-bootstrap] wsl-bootstrap: starting cross-distro routing service
+[2026-05-22T16:21:50.025517200Z][wsl-bootstrap.ipc] run b3042b6e-cross-distro for component router on /run/guest-services/wsl-cross-distro.sock
+, stdout: , wslErrorCode: DockerDesktop/Wsl/ExecError)
+Read our policy for uploaded diagnostic data
