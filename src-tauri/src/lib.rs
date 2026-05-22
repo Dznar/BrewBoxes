@@ -88,7 +88,7 @@ fn get_engine_dir(app: &AppHandle) -> PathBuf {
 
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
-        // 1. Check for Native Engine (brewboxes-engine)
+        // Strictly use Native Engine on Windows to avoid Docker Desktop / Podman Desktop reliability issues
         let mut check_wsl = StdCommand::new("wsl");
         check_wsl.args(["--list", "--quiet"]);
         #[cfg(windows)]
@@ -105,29 +105,7 @@ fn detect_engine() -> Result<String, String> {
                 return Ok("native".to_string());
             }
         }
-
-        // 2. Check for traditional engines
-        let engines = vec!["podman.exe", "docker.exe"];
-        for engine in &engines {
-            let mut cmd = StdCommand::new("where");
-            cmd.arg(engine);
-            #[cfg(windows)]
-            cmd.creation_flags(0x08000000);
-            
-            let output = cmd.output();
-            if let Ok(out) = output {
-                if out.status.success() {
-                    for line in String::from_utf8_lossy(&out.stdout).lines() {
-                        let path = line.trim();
-                        if !path.is_empty() && path.to_lowercase().ends_with(".exe") {
-                            log::info!("Detected engine via where (.exe): {}", path);
-                            return Ok(path.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        Err("No container engine found. You can use the 'Setup Native Engine' option to install a minimal engine.".to_string())
+        Err("Native Engine not found. Please use the 'Setup Native Engine' button to initialize the reliable container runtime.".to_string())
     } else {
         let engines = vec!["podman", "docker"];
         for engine in engines {
