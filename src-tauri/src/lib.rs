@@ -243,7 +243,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     if !nerdctl_tar.exists() {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v1.7.6/nerdctl-full-1.7.6-linux-amd64.tar.gz"]);
+        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-2.3.1-windows-amd64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
