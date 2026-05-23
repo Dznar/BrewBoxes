@@ -170,6 +170,12 @@ async fn debug_native_engine() -> Result<String, String> {
         [ -f /var/log/containerd/boot.log ] && cat /var/log/containerd/boot.log || echo "No boot log"
         echo "--- ENGINE LOG ---"
         [ -f /var/log/containerd/containerd.log ] && tail -n 50 /var/log/containerd/containerd.log || echo "No engine log"
+        echo "--- FOREGROUND TEST ---"
+        if ! pgrep containerd > /dev/null; then
+            timeout 3 /usr/local/bin/containerd 2>&1 || echo "Test ended."
+        else
+            echo "Already running, skipping foreground test."
+        fi
         echo "--- DEPENDENCIES ---"
         echo "nerdctl:"
         ldd /usr/local/bin/nerdctl 2>&1
@@ -717,4 +723,6 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+e running tauri application");
 }
