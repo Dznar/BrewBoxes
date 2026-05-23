@@ -190,15 +190,23 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
     if engine == "native" {
         // Robust containerd startup and socket check
         let start_script = r#"
-            mkdir -p /run/containerd /var/lib/containerd
-            if ! pgrep containerd > /dev/null; then
-                # Ensure we have a log file we can write to
-                touch /var/log/containerd.log
-                # Start containerd with nohup and redirect to log
-                nohup /usr/local/bin/containerd > /var/log/containerd.log 2>&1 &
+            mkdir -p /run/containerd /var/lib/containerd /var/log/containerd
+            if ! pgrep -x containerd > /dev/null; then
+                echo "Starting containerd..." > /var/log/containerd/boot.log
+                # Start containerd and capture immediate errors
+                nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
+                
                 # Wait up to 10 seconds for the socket to appear
                 for i in $(seq 1 50); do
-                    [ -S /run/containerd/containerd.sock ] && break
+                    if [ -S /run/containerd/containerd.sock ]; then
+                        echo "Socket found!" >> /var/log/containerd/boot.log
+                        break
+                    fi
+                    if ! pgrep -x containerd > /dev/null; then
+                        echo "containerd died early. Last logs:" >> /var/log/containerd/boot.log
+                        tail -n 20 /var/log/containerd/containerd.log >> /var/log/containerd/boot.log
+                        break
+                    fi
                     sleep 0.2
                 done
             fi
@@ -262,6 +270,8 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         if !status.success() { 
             return Err(format!("Failed to download Alpine rootfs for {}. Please check your connection.", arch)); 
         }
+    } else {
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine rootfs."})).unwrap();
     }
 
     // 2. Download Nerdctl (Container Management)
@@ -312,7 +322,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     
     // Use gcompat + libc6-compat + libseccomp for maximum binary compatibility on Alpine
     let extract_script = format!(
-        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux procps coreutils && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
         wsl_tar_path
     );
     
@@ -697,18 +707,6 @@ pub fn run() {
         list_private_containers,
         launch_container,
         stop_container,
-        delete_container,
-        open_in_browser,
-        open_container_window,
-        setup_native_engine,
-        check_engine_status,
-        reset_native_engine,
-        debug_native_engine
-    ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
-}
-iner,
         delete_container,
         open_in_browser,
         open_container_window,
