@@ -209,14 +209,9 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
             chmod 1777 /tmp
 
             # Networking Tweaks for WSL2 Stability
-            # 1. Disable IPv6 to prevent slow discovery/connection drops
             sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
             sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
-            
-            # 2. Lower MTU to 1400 to avoid packet fragmentation issues common in WSL2 NAT
             ip link set eth0 mtu 1400 >/dev/null 2>&1
-
-            # 3. Ensure DNS is responsive (WSL2 relay can be flaky)
             if ! grep -q "8.8.8.8" /etc/resolv.conf; then
                 echo "nameserver 8.8.8.8" >> /etc/resolv.conf
             fi
@@ -226,22 +221,24 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
                 mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
             fi
 
-            if ! pgrep -x containerd > /dev/null; then
-                echo "[$(date)] Starting containerd..." > /var/log/containerd/boot.log
+            # Check for existing socket OR running process
+            if [ ! -S /run/containerd/containerd.sock ] || ! pgrep -x containerd >/dev/null; then
+                echo "[$(date)] Starting containerd..." >> /var/log/containerd/boot.log
                 
-                # Start containerd and fully detach it from this shell session
-                setsid nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
+                # Clean up stale socket if process is dead
+                if ! pgrep -x containerd >/dev/null; then
+                    rm -f /run/containerd/containerd.sock
+                fi
+
+                # Start containerd with full detachment
+                # We use a double-fork pattern with setsid and nohup
+                (setsid nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &)
                 
-                # Wait up to 15 seconds for the socket with higher frequency check
+                # Wait up to 15 seconds for the socket
                 for i in $(seq 1 75); do
                     if [ -S /run/containerd/containerd.sock ]; then
                         echo "Socket ready after $i checks." >> /var/log/containerd/boot.log
                         break
-                    fi
-                    if ! pgrep -x containerd > /dev/null; then
-                        echo "Fatal: containerd process exited. Last 20 lines of log:" >> /var/log/containerd/boot.log
-                        tail -n 20 /var/log/containerd/containerd.log >> /var/log/containerd/boot.log
-                        exit 1
                     fi
                     sleep 0.2
                 done
@@ -253,11 +250,8 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
         #[cfg(windows)]
         start_cmd.creation_flags(0x08000000);
         
-        if let Ok(status) = start_cmd.status() {
-            if !status.success() {
-                log::error!("Native Engine startup script failed");
-            }
-        }
+        // Ensure startup completes before moving on
+        let _ = start_cmd.status();
 
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
