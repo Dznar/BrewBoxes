@@ -201,8 +201,28 @@ async fn debug_native_engine() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+use std::sync::OnceLock;
+use std::process::Child;
+
+static DISTRO_GUARD: OnceLock<Child> = OnceLock::new();
+
+fn ensure_engine_alive() {
+    if cfg!(windows) && DISTRO_GUARD.get().is_none() {
+        let mut cmd = StdCommand::new("wsl");
+        cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sleep", "infinity"]);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        if let Ok(child) = cmd.spawn() {
+            let _ = DISTRO_GUARD.set(child);
+            log::info!("Distro Guard started: brewboxes-engine is now pinned alive.");
+        }
+    }
+}
+
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
+        ensure_engine_alive();
+        
         // Ultimate containerd startup and networking fixes for WSL2
         let start_script = r#"
             # Ensure critical paths exist
@@ -228,10 +248,8 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
                 rm -f /run/containerd/containerd.sock
                 rm -rf /run/containerd/*
 
-                # Start containerd with full detachment and explicit PATH
-                # The 'sleep infinity' trick keeps the WSL distro alive
+                # Start containerd with full detachment
                 (setsid nohup /usr/local/bin/containerd < /dev/null > /var/log/containerd/containerd.log 2>&1 &)
-                (setsid nohup sleep infinity < /dev/null > /dev/null 2>&1 &)
                 
                 # Wait for socket
                 for i in $(seq 1 50); do
