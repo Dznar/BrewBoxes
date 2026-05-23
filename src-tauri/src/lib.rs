@@ -151,6 +151,8 @@ async fn debug_native_engine() -> Result<String, String> {
     let diag_script = r#"
         echo "--- OS VERSION ---"
         cat /etc/alpine-release 2>/dev/null || echo "N/A"
+        echo "--- APK PACKAGES ---"
+        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables" || echo "No relevant packages found"
         echo "--- BINARIES ---"
         ls -l /usr/local/bin/nerdctl /usr/local/bin/containerd /usr/local/bin/runc 2>/dev/null || echo "Some binaries missing"
         echo "--- PROCESSES ---"
@@ -158,9 +160,12 @@ async fn debug_native_engine() -> Result<String, String> {
         echo "--- SOCKET ---"
         ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
         echo "--- LOGS ---"
-        tail -n 20 /var/log/containerd.log 2>/dev/null || echo "No logs found"
+        [ -f /var/log/containerd.log ] && tail -n 50 /var/log/containerd.log || echo "No logs found"
         echo "--- DEPENDENCIES ---"
-        ldd /usr/local/bin/nerdctl 2>/dev/null || echo "ldd failed"
+        echo "nerdctl:"
+        ldd /usr/local/bin/nerdctl 2>&1 || echo "ldd nerdctl failed"
+        echo "containerd:"
+        ldd /usr/local/bin/containerd 2>&1 || echo "ldd containerd failed"
     "#;
 
     let mut cmd = StdCommand::new("wsl");
@@ -176,11 +181,12 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
     if engine == "native" {
         // Robust containerd startup and socket check
         let start_script = r#"
-            mkdir -p /run/containerd
+            mkdir -p /run/containerd /var/lib/containerd
             if ! pgrep containerd > /dev/null; then
                 # Ensure we have a log file we can write to
                 touch /var/log/containerd.log
-                /usr/local/bin/containerd > /var/log/containerd.log 2>&1 &
+                # Start containerd with nohup and redirect to log
+                nohup /usr/local/bin/containerd > /var/log/containerd.log 2>&1 &
                 # Wait up to 10 seconds for the socket to appear
                 for i in $(seq 1 50); do
                     [ -S /run/containerd/containerd.sock ] && break
@@ -243,7 +249,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     if !nerdctl_tar.exists() {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-2.3.1-linux-amd64.tar.gz"]);
+        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-amd64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
@@ -275,9 +281,9 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     let remaining_path = win_tar_path[3..].replace("\\", "/");
     let wsl_tar_path = format!("/mnt/{}/{}", drive_letter, remaining_path);
     
-    // Use gcompat + libc6-compat for maximum binary compatibility on Alpine
+    // Use gcompat + libc6-compat + libseccomp for maximum binary compatibility on Alpine
     let extract_script = format!(
-        "apk add --no-cache libc6-compat libgcc gcompat && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
         wsl_tar_path
     );
     
