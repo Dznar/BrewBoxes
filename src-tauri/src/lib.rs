@@ -232,7 +232,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     if !rootfs_tar.exists() {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/x86_64/alpine-minirootfs-3.20.0-x86_64.tar.gz"]);
+        download.args(["-L", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.9/releases/x86_64/alpine-minirootfs-3.9.6-x86_64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Alpine: {}", e))?;
@@ -243,7 +243,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     if !nerdctl_tar.exists() {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-2.3.1-windows-amd64.tar.gz"]);
+        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-2.3.1-linux-amd64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
