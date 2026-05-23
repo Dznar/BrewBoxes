@@ -67,9 +67,9 @@ fn wait_for_port(port: u16, timeout_seconds: u64) -> bool {
 
     while start.elapsed() < timeout {
         if TcpStream::connect_timeout(&addr.parse().unwrap(), Duration::from_millis(500)).is_ok() {
-            // Found port, but give it 5 seconds to actually start responding (avoid ERR_EMPTY_RESPONSE)
+            // Found port, but give it 10 seconds to actually start responding (avoid ERR_EMPTY_RESPONSE)
             // Heavy distros like Arch can take a moment to initialize the web server
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(10));
             return true;
         }
         thread::sleep(Duration::from_millis(200));
@@ -102,21 +102,11 @@ fn detect_engine() -> Result<String, String> {
             );
             
             if list.contains("brewboxes-engine") {
-                // Verify if nerdctl is actually installed inside
-                let mut check_binary = StdCommand::new("wsl");
-                check_binary.args(["-d", "brewboxes-engine", "-u", "root", "--", "ls", "/usr/local/bin/nerdctl"]);
-                #[cfg(windows)]
-                check_binary.creation_flags(0x08000000);
-                
-                if let Ok(out) = check_binary.output() {
-                    if out.status.success() {
-                        log::info!("Detected native engine: brewboxes-engine (verified)");
-                        return Ok("native".to_string());
-                    }
-                }
+                // Just check if distro exists. We'll handle containerd readiness in run_engine_cmd
+                return Ok("native".to_string());
             }
         }
-        Err("Native Engine not found or incomplete. Please use the 'Setup Native Engine' button.".to_string())
+        Err("Native Engine not found. Please use the 'Setup Native Engine' button.".to_string())
     } else {
         let engines = vec!["podman", "docker"];
         for engine in engines {
@@ -132,6 +122,7 @@ fn detect_engine() -> Result<String, String> {
 #[tauri::command]
 async fn reset_native_engine(app: AppHandle) -> Result<(), String> {
     if !cfg!(windows) { return Err("Only on Windows".to_string()); }
+    
     let mut unregister = StdCommand::new("wsl");
     unregister.args(["--unregister", "brewboxes-engine"]);
     #[cfg(windows)]
@@ -156,7 +147,8 @@ async fn debug_native_engine() -> Result<String, String> {
         echo "--- NETWORKING ---"
         ip addr show eth0 | grep -E "inet |mtu" || echo "eth0 not found"
         cat /etc/resolv.conf
-        ping -c 1 8.8.8.8 >/dev/null 2>&1 && echo "Internet connectivity: OK" || echo "Internet connectivity: FAILED"
+        echo "Testing connection to OCI Registry..."
+        curl -I -s --connect-timeout 5 https://lscr.io && echo "OCI Connectivity: OK" || echo "OCI Connectivity: FAILED"
         echo "--- COMPATIBILITY ---"
         ls -l /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "glibc symlink missing"
         echo "--- APK PACKAGES ---"
@@ -175,16 +167,10 @@ async fn debug_native_engine() -> Result<String, String> {
         ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
         echo "--- LOGS DIRECTORY ---"
         ls -R /var/log/containerd 2>/dev/null || echo "/var/log/containerd missing"
-        echo "--- BOOT LOG ---"
-        [ -f /var/log/containerd/boot.log ] && cat /var/log/containerd/boot.log || echo "No boot log"
         echo "--- ENGINE LOG ---"
         [ -f /var/log/containerd/containerd.log ] && tail -n 50 /var/log/containerd/containerd.log || echo "No engine log"
-        echo "--- FOREGROUND TEST ---"
-        if ! pgrep -x containerd > /dev/null; then
-            timeout 5 /usr/local/bin/containerd 2>&1 || echo "Test ended."
-        else
-            echo "Already running, skipping foreground test."
-        fi
+        echo "--- LOCAL IMAGES ---"
+        /usr/local/bin/nerdctl images
         echo "--- DEPENDENCIES ---"
         echo "nerdctl:"
         ldd /usr/local/bin/nerdctl 2>&1
@@ -206,10 +192,23 @@ use std::process::Child;
 
 static ENGINE_PROCESS: OnceLock<Child> = OnceLock::new();
 
+// Helper to check if containerd socket is ready
+fn is_containerd_ready() -> bool {
+    let mut check = StdCommand::new("wsl");
+    check.args(["-d", "brewboxes-engine", "-u", "root", "--", "ls", "/run/containerd/containerd.sock"]);
+    #[cfg(windows)]
+    check.creation_flags(0x08000000);
+    
+    if let Ok(output) = check.output() {
+        return output.status.success();
+    }
+    false
+}
+
 fn start_managed_engine() {
     if !cfg!(windows) { return; }
     
-    // Only attempt if engine disto exists
+    // Only attempt if engine distro exists
     let mut check = StdCommand::new("wsl");
     check.args(["-l", "-q"]);
     #[cfg(windows)]
@@ -223,6 +222,11 @@ fn start_managed_engine() {
         );
         
         if list.contains("brewboxes-engine") {
+            // If already running and socket exists, we're good
+            if is_containerd_ready() {
+                return;
+            }
+
             // Check if already managed
             if ENGINE_PROCESS.get().is_none() {
                 let start_script = r#"
@@ -234,7 +238,7 @@ fn start_managed_engine() {
                     rm -f /run/containerd/containerd.sock
                     rm -rf /run/containerd/*
                     
-                    # 3. Networking Fixes
+                    # 3. Networking Fixes (Crucial for Stability)
                     sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
                     ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
                     grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
@@ -258,8 +262,22 @@ fn start_managed_engine() {
                 if let Ok(child) = cmd.spawn() {
                     let _ = ENGINE_PROCESS.set(child);
                     log::info!("Managed Engine process spawned.");
-                    // Give it a moment to initialize the socket
-                    thread::sleep(Duration::from_secs(2));
+                    
+                    // Wait up to 10 seconds for the socket to appear
+                    for _ in 0..50 {
+                        if is_containerd_ready() {
+                            log::info!("Containerd socket is ready.");
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(200));
+                    }
+                }
+            } else {
+                // Engine process exists but socket missing? 
+                // Maybe it's still booting.
+                for _ in 0..10 {
+                    if is_containerd_ready() { return; }
+                    thread::sleep(Duration::from_millis(500));
                 }
             }
         }
@@ -269,6 +287,14 @@ fn start_managed_engine() {
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
         start_managed_engine();
+
+        // One last check: ensure MTU is 1400 even if the engine was already "up"
+        // This handles cases where WSL was started by another command (like Debug)
+        let mut mtu_fix = StdCommand::new("wsl");
+        mtu_fix.args(["-d", "brewboxes-engine", "-u", "root", "--", "ip", "link", "set", "eth0", "mtu", "1400"]);
+        #[cfg(windows)]
+        mtu_fix.creation_flags(0x08000000);
+        let _ = mtu_fix.status();
 
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
@@ -447,7 +473,7 @@ async fn launch_container(
                 let fe_port: u16 = port_str.parse().map_err(|_| "Failed to parse host port".to_string())?;
                 let url = format!("http://localhost:{}", fe_port);
 
-                if !wait_for_port(fe_port, 30) {
+                if !wait_for_port(fe_port, 60) {
                     return Err("Timed out waiting for container web interface to resume.".to_string());
                 }
 
@@ -652,7 +678,7 @@ async fn launch_container(
     let url = format!("http://localhost:{}", fe_port);
 
     window.emit("progress", serde_json::json!({"type": "status", "message": "Waiting for web interface..."})).unwrap();
-    if !wait_for_port(fe_port, 30) {
+    if !wait_for_port(fe_port, 60) {
         return Err("Timed out waiting for container web interface to start.".to_string());
     }
 
