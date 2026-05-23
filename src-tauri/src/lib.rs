@@ -607,8 +607,9 @@ async fn launch_container(
 
     let mut run_args = vec!["run", "-d", "--name", &container_name];
 
-    // Only add --rm if NOT private
-    if !is_private {
+    // nerdctl (native engine) does not support -d and --rm together.
+    // Docker/Podman do, but for compatibility we'll skip --rm on native.
+    if !is_private && engine != "native" {
         run_args.push("--rm");
     }
 
