@@ -204,40 +204,31 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
     if engine == "native" {
         // Robust containerd startup and networking fixes for WSL2
         let start_script = r#"
-            # Ensure critical paths exist and are writable
-            mkdir -p /run/containerd /var/lib/containerd /var/log/containerd /tmp
+            # Ensure critical paths exist
+            mkdir -p /run/containerd /var/log/containerd /var/lib/containerd /tmp
             chmod 1777 /tmp
 
-            # Networking Tweaks for WSL2 Stability
-            sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
-            sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
-            ip link set eth0 mtu 1400 >/dev/null 2>&1
-            if ! grep -q "8.8.8.8" /etc/resolv.conf; then
-                echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-            fi
+            # Networking Tweaks for WSL2 Stability (sticky application)
+            sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+            ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
+            grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
 
-            # Mount cgroups v2 if not already present
-            if [ ! -d /sys/fs/cgroup/containerd ]; then
-                mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
-            fi
-
-            # Check for existing socket OR running process
-            if [ ! -S /run/containerd/containerd.sock ] || ! pgrep -x containerd >/dev/null; then
-                echo "[$(date)] Starting containerd..." >> /var/log/containerd/boot.log
+            # Check if containerd is actually running and responding
+            if ! pgrep -x containerd >/dev/null || [ ! -S /run/containerd/containerd.sock ]; then
+                echo "[$(date)] Engine start/recovery initiated..." >> /var/log/containerd/boot.log
                 
-                # Clean up stale socket if process is dead
-                if ! pgrep -x containerd >/dev/null; then
-                    rm -f /run/containerd/containerd.sock
-                fi
+                # Kill stale process or remove stale socket
+                pgrep -x containerd | xargs kill -9 >/dev/null 2>&1 || true
+                rm -f /run/containerd/containerd.sock
 
-                # Start containerd with full detachment
-                # We use a double-fork pattern with setsid and nohup
-                (setsid nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &)
+                # Start containerd with full detachment (double-fork pattern)
+                # Redirecting stdin from /dev/null is crucial for backgrounding in some WSL environments
+                (setsid nohup /usr/local/bin/containerd < /dev/null > /var/log/containerd/containerd.log 2>&1 &)
                 
-                # Wait up to 15 seconds for the socket
-                for i in $(seq 1 75); do
+                # Wait up to 10 seconds for the socket to appear
+                for i in $(seq 1 50); do
                     if [ -S /run/containerd/containerd.sock ]; then
-                        echo "Socket ready after $i checks." >> /var/log/containerd/boot.log
+                        echo "Socket ready after $((i*200))ms." >> /var/log/containerd/boot.log
                         break
                     fi
                     sleep 0.2
@@ -249,9 +240,7 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
         start_cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
         #[cfg(windows)]
         start_cmd.creation_flags(0x08000000);
-        
-        // Ensure startup completes before moving on
-        let _ = start_cmd.status();
+        let _ = start_cmd.status(); // Wait for the startup script to finish its wait-loop
 
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
@@ -357,7 +346,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     
     // Use gcompat + libc6-compat + libseccomp for maximum binary compatibility on Alpine
     let extract_script = format!(
-        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux procps coreutils && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux procps coreutils iproute2 bridge-utils && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
         wsl_tar_path
     );
     
