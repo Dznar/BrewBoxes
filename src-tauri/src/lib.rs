@@ -605,10 +605,17 @@ async fn launch_container(
 
     window.emit("progress", serde_json::json!({"type": "status", "message": format!("Starting container using {}...", engine)})).unwrap();
 
+    // Pre-flight Cleanup for non-private containers
+    // Since nerdctl doesn't support -d and --rm together, we manually 
+    // remove any existing container with this name to prevent stacking.
+    if !is_private {
+        let mut rm_cmd = run_engine_cmd(&engine, vec!["rm", "-f", &container_name], Some(&window));
+        let _ = rm_cmd.status();
+    }
+
     let mut run_args = vec!["run", "-d", "--name", &container_name];
 
-    // nerdctl (native engine) does not support -d and --rm together.
-    // Docker/Podman do, but for compatibility we'll skip --rm on native.
+    // Skip --rm for native engine as it conflicts with -d
     if !is_private && engine != "native" {
         run_args.push("--rm");
     }
