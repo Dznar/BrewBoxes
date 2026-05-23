@@ -164,6 +164,8 @@ async fn debug_native_engine() -> Result<String, String> {
         /usr/local/bin/containerd --version 2>&1 || echo "containerd exec failed"
         echo "--- PROCESSES ---"
         ps aux | grep -E "containerd|nerdctl" | grep -v grep
+        echo "--- CGROUPS ---"
+        [ -d /sys/fs/cgroup/containerd ] && echo "cgroup2 mounted" || echo "cgroup2 missing"
         echo "--- SOCKET ---"
         ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
         echo "--- LOGS DIRECTORY ---"
