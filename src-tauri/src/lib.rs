@@ -151,8 +151,10 @@ async fn debug_native_engine() -> Result<String, String> {
     let diag_script = r#"
         echo "--- OS VERSION ---"
         cat /etc/alpine-release 2>/dev/null || echo "N/A"
+        echo "--- COMPATIBILITY ---"
+        ls -l /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "glibc symlink missing"
         echo "--- APK PACKAGES ---"
-        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables" || echo "No relevant packages found"
+        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables|ca-certificates" || echo "No relevant packages found"
         echo "--- BINARIES ---"
         ls -l /usr/local/bin/nerdctl /usr/local/bin/containerd /usr/local/bin/runc 2>/dev/null || echo "Some binaries missing"
         echo "--- PROCESSES ---"
@@ -163,9 +165,9 @@ async fn debug_native_engine() -> Result<String, String> {
         [ -f /var/log/containerd.log ] && tail -n 50 /var/log/containerd.log || echo "No logs found"
         echo "--- DEPENDENCIES ---"
         echo "nerdctl:"
-        ldd /usr/local/bin/nerdctl 2>&1 || echo "ldd nerdctl failed"
+        ldd /usr/local/bin/nerdctl 2>&1
         echo "containerd:"
-        ldd /usr/local/bin/containerd 2>&1 || echo "ldd containerd failed"
+        ldd /usr/local/bin/containerd 2>&1
     "#;
 
     let mut cmd = StdCommand::new("wsl");
@@ -224,8 +226,8 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     }
 
     let engine_dir = get_engine_dir(&app);
-    let rootfs_tar = engine_dir.join("alpine-rootfs.tar.gz");
-    let nerdctl_tar = engine_dir.join("nerdctl-full.tar.gz");
+    let rootfs_tar = engine_dir.join("alpine-rootfs-3.24.0.tar.gz");
+    let nerdctl_tar = engine_dir.join("nerdctl-full-2.3.1.tar.gz");
     let install_dir = engine_dir.join("distro");
 
     if !install_dir.exists() {
@@ -236,9 +238,9 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
 
     // 1. Download Alpine RootFS
     if !rootfs_tar.exists() {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine)..."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine 3.24)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.9/releases/x86_64/alpine-minirootfs-3.9.6-x86_64.tar.gz"]);
+        download.args(["-L", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Alpine: {}", e))?;
@@ -283,7 +285,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     
     // Use gcompat + libc6-compat + libseccomp for maximum binary compatibility on Alpine
     let extract_script = format!(
-        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
         wsl_tar_path
     );
     
