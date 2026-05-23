@@ -204,66 +204,71 @@ async fn debug_native_engine() -> Result<String, String> {
 use std::sync::OnceLock;
 use std::process::Child;
 
-static DISTRO_GUARD: OnceLock<Child> = OnceLock::new();
+static ENGINE_PROCESS: OnceLock<Child> = OnceLock::new();
 
-fn ensure_engine_alive() {
-    if cfg!(windows) && DISTRO_GUARD.get().is_none() {
-        let mut cmd = StdCommand::new("wsl");
-        cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sleep", "infinity"]);
-        #[cfg(windows)]
-        cmd.creation_flags(0x08000000);
-        if let Ok(child) = cmd.spawn() {
-            let _ = DISTRO_GUARD.set(child);
-            log::info!("Distro Guard started: brewboxes-engine is now pinned alive.");
+fn start_managed_engine() {
+    if !cfg!(windows) { return; }
+    
+    // Only attempt if engine disto exists
+    let mut check = StdCommand::new("wsl");
+    check.args(["-l", "-q"]);
+    #[cfg(windows)]
+    check.creation_flags(0x08000000);
+    
+    if let Ok(output) = check.output() {
+        let list = String::from_utf16_lossy(
+            &output.stdout.chunks_exact(2)
+                .map(|a| u16::from_le_bytes([a[0], a[1]]))
+                .collect::<Vec<u16>>()
+        );
+        
+        if list.contains("brewboxes-engine") {
+            // Check if already managed
+            if ENGINE_PROCESS.get().is_none() {
+                let start_script = r#"
+                    # 1. Prepare Environment
+                    mkdir -p /run/containerd /var/log/containerd /var/lib/containerd /tmp
+                    chmod 1777 /tmp
+                    
+                    # 2. Hard Cleanup of stale state
+                    rm -f /run/containerd/containerd.sock
+                    rm -rf /run/containerd/*
+                    
+                    # 3. Networking Fixes
+                    sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+                    ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
+                    grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+                    
+                    # 4. Critical: Force cgroup2 mount
+                    if ! grep -q cgroup2 /proc/mounts; then
+                        mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+                    fi
+                    
+                    echo "[$(date)] Starting Managed Engine..." > /var/log/containerd/boot.log
+                    
+                    # 5. Run containerd in FOREGROUND (Managed by Tauri)
+                    exec /usr/local/bin/containerd
+                "#;
+
+                let mut cmd = StdCommand::new("wsl");
+                cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
+                #[cfg(windows)]
+                cmd.creation_flags(0x08000000);
+                
+                if let Ok(child) = cmd.spawn() {
+                    let _ = ENGINE_PROCESS.set(child);
+                    log::info!("Managed Engine process spawned.");
+                    // Give it a moment to initialize the socket
+                    thread::sleep(Duration::from_secs(2));
+                }
+            }
         }
     }
 }
 
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
-        ensure_engine_alive();
-        
-        // Ultimate containerd startup and networking fixes for WSL2
-        let start_script = r#"
-            # Ensure critical paths exist
-            mkdir -p /run/containerd /var/log/containerd /var/lib/containerd /tmp
-            chmod 1777 /tmp
-
-            # Networking Tweaks for WSL2 Stability
-            sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
-            ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
-            grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-
-            # CRITICAL: Force cgroup2 mount for containerd/runc
-            if ! grep -q cgroup2 /proc/mounts; then
-                mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
-            fi
-
-            # Check if containerd is actually responding
-            if ! pgrep -x containerd >/dev/null || [ ! -S /run/containerd/containerd.sock ]; then
-                echo "[$(date)] Engine recovery initiated..." >> /var/log/containerd/boot.log
-                
-                # Hard cleanup
-                pgrep -x containerd | xargs kill -9 >/dev/null 2>&1 || true
-                rm -f /run/containerd/containerd.sock
-                rm -rf /run/containerd/*
-
-                # Start containerd with full detachment
-                (setsid nohup /usr/local/bin/containerd < /dev/null > /var/log/containerd/containerd.log 2>&1 &)
-                
-                # Wait for socket
-                for i in $(seq 1 50); do
-                    [ -S /run/containerd/containerd.sock ] && break
-                    sleep 0.2
-                done
-            fi
-        "#;
-        
-        let mut start_cmd = StdCommand::new("wsl");
-        start_cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
-        #[cfg(windows)]
-        start_cmd.creation_flags(0x08000000);
-        let _ = start_cmd.status();
+        start_managed_engine();
 
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
