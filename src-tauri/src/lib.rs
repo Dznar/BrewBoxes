@@ -226,7 +226,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     }
 
     let engine_dir = get_engine_dir(&app);
-    let rootfs_tar = engine_dir.join("alpine-rootfs-3.24.0.tar.gz");
+    let rootfs_tar = engine_dir.join("alpine-rootfs-3.23.4.tar.gz");
     let nerdctl_tar = engine_dir.join("nerdctl-full-2.3.1.tar.gz");
     let install_dir = engine_dir.join("distro");
 
@@ -238,15 +238,17 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
 
     // 1. Download Alpine RootFS
     if !rootfs_tar.exists() {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine 3.24)..."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine 3.23)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-f", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz"]);
+        download.args(["-L", "-f", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.4-x86_64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Alpine: {}", e))?;
-        if !status.success() { return Err("Failed to download Alpine rootfs. Please check your internet connection.".to_string()); }
+        if !status.success() { 
+            return Err("Failed to download Alpine rootfs. It seems the v3.24 release is still rolling out on mirrors; we tried falling back to v3.23.4 but that also failed. Please check your connection.".to_string()); 
+        }
     } else {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine 3.24 rootfs."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine rootfs."})).unwrap();
     }
 
     // 2. Download Nerdctl (Container Management)
