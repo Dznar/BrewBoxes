@@ -122,11 +122,6 @@ fn detect_engine() -> Result<String, String> {
 async fn reset_native_engine(app: AppHandle) -> Result<(), String> {
     if !cfg!(windows) { return Err("Only on Windows".to_string()); }
     
-    // Kill engine process if it was being managed (backward compatibility)
-    if let Some(mut child) = ENGINE_PROCESS.take() {
-        let _ = child.kill();
-    }
-
     let mut unregister = StdCommand::new("wsl");
     unregister.args(["--unregister", "brewboxes-engine"]);
     #[cfg(windows)]
