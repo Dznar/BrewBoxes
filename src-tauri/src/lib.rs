@@ -170,11 +170,6 @@ async fn debug_native_engine() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-use std::sync::OnceLock;
-use std::process::Child;
-
-static ENGINE_PROCESS: OnceLock<Child> = OnceLock::new();
-
 fn start_managed_engine() {
     if !cfg!(windows) { return; }
     
