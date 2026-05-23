@@ -102,7 +102,6 @@ fn detect_engine() -> Result<String, String> {
             );
             
             if list.contains("brewboxes-engine") {
-                // Just check if distro exists. We'll handle containerd readiness in run_engine_cmd
                 return Ok("native".to_string());
             }
         }
@@ -123,6 +122,11 @@ fn detect_engine() -> Result<String, String> {
 async fn reset_native_engine(app: AppHandle) -> Result<(), String> {
     if !cfg!(windows) { return Err("Only on Windows".to_string()); }
     
+    // Kill engine process if it was being managed (backward compatibility)
+    if let Some(mut child) = ENGINE_PROCESS.take() {
+        let _ = child.kill();
+    }
+
     let mut unregister = StdCommand::new("wsl");
     unregister.args(["--unregister", "brewboxes-engine"]);
     #[cfg(windows)]
@@ -149,33 +153,17 @@ async fn debug_native_engine() -> Result<String, String> {
         cat /etc/resolv.conf
         echo "Testing connection to OCI Registry..."
         curl -I -s --connect-timeout 5 https://lscr.io && echo "OCI Connectivity: OK" || echo "OCI Connectivity: FAILED"
-        echo "--- COMPATIBILITY ---"
-        ls -l /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "glibc symlink missing"
         echo "--- APK PACKAGES ---"
-        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables|ca-certificates|util-linux|procps|coreutils" || echo "No relevant packages found"
+        apk list -I 2>/dev/null | grep -E "podman|crun|conmon|iptables|ca-certificates|util-linux|procps|coreutils" || echo "No relevant packages found"
         echo "--- BINARIES ---"
-        ls -l /usr/local/bin/nerdctl /usr/local/bin/containerd /usr/local/bin/runc 2>/dev/null || echo "Some binaries missing"
+        ls -l /usr/bin/podman /usr/bin/crun /usr/bin/conmon 2>/dev/null || echo "Some binaries missing"
         echo "--- EXECUTION TEST ---"
-        /usr/local/bin/nerdctl --version 2>&1 || echo "nerdctl exec failed"
-        /usr/local/bin/containerd --version 2>&1 || echo "containerd exec failed"
-        echo "--- PROCESSES ---"
-        ps aux | grep -E "containerd|nerdctl" | grep -v grep
+        /usr/bin/podman version 2>&1 || echo "podman exec failed"
         echo "--- CGROUPS ---"
         grep -q cgroup2 /proc/filesystems && echo "Kernel supports cgroup2" || echo "Kernel lacks cgroup2"
         mount | grep cgroup2 || echo "cgroup2 not mounted"
-        echo "--- SOCKET ---"
-        ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
-        echo "--- LOGS DIRECTORY ---"
-        ls -R /var/log/containerd 2>/dev/null || echo "/var/log/containerd missing"
-        echo "--- ENGINE LOG ---"
-        [ -f /var/log/containerd/containerd.log ] && tail -n 50 /var/log/containerd/containerd.log || echo "No engine log"
         echo "--- LOCAL IMAGES ---"
-        /usr/local/bin/nerdctl images
-        echo "--- DEPENDENCIES ---"
-        echo "nerdctl:"
-        ldd /usr/local/bin/nerdctl 2>&1
-        echo "containerd:"
-        ldd /usr/local/bin/containerd 2>&1
+        /usr/bin/podman images
     "#;
 
     let mut cmd = StdCommand::new("wsl");
@@ -192,112 +180,36 @@ use std::process::Child;
 
 static ENGINE_PROCESS: OnceLock<Child> = OnceLock::new();
 
-// Helper to check if containerd socket is ready
-fn is_containerd_ready() -> bool {
-    let mut check = StdCommand::new("wsl");
-    check.args(["-d", "brewboxes-engine", "-u", "root", "--", "ls", "/run/containerd/containerd.sock"]);
-    #[cfg(windows)]
-    check.creation_flags(0x08000000);
-    
-    if let Ok(output) = check.output() {
-        return output.status.success();
-    }
-    false
-}
-
 fn start_managed_engine() {
     if !cfg!(windows) { return; }
     
-    // Only attempt if engine distro exists
-    let mut check = StdCommand::new("wsl");
-    check.args(["-l", "-q"]);
+    // Preparation script (Mounts and Networking)
+    // No daemon needed for Podman!
+    let start_script = r#"
+        mkdir -p /run/containerd /var/log/containerd /var/lib/containerd /tmp
+        chmod 1777 /tmp
+        sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+        ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
+        grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+        if ! grep -q cgroup2 /proc/mounts; then
+            mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+        fi
+    "#;
+
+    let mut cmd = StdCommand::new("wsl");
+    cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
     #[cfg(windows)]
-    check.creation_flags(0x08000000);
-    
-    if let Ok(output) = check.output() {
-        let list = String::from_utf16_lossy(
-            &output.stdout.chunks_exact(2)
-                .map(|a| u16::from_le_bytes([a[0], a[1]]))
-                .collect::<Vec<u16>>()
-        );
-        
-        if list.contains("brewboxes-engine") {
-            // If already running and socket exists, we're good
-            if is_containerd_ready() {
-                return;
-            }
-
-            // Check if already managed
-            if ENGINE_PROCESS.get().is_none() {
-                let start_script = r#"
-                    # 1. Prepare Environment
-                    mkdir -p /run/containerd /var/log/containerd /var/lib/containerd /tmp
-                    chmod 1777 /tmp
-                    
-                    # 2. Hard Cleanup of stale state
-                    rm -f /run/containerd/containerd.sock
-                    rm -rf /run/containerd/*
-                    
-                    # 3. Networking Fixes (Crucial for Stability)
-                    sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
-                    ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
-                    grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
-                    
-                    # 4. Critical: Force cgroup2 mount
-                    if ! grep -q cgroup2 /proc/mounts; then
-                        mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
-                    fi
-                    
-                    echo "[$(date)] Starting Managed Engine..." > /var/log/containerd/boot.log
-                    
-                    # 5. Run containerd in FOREGROUND (Managed by Tauri)
-                    exec /usr/local/bin/containerd
-                "#;
-
-                let mut cmd = StdCommand::new("wsl");
-                cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
-                #[cfg(windows)]
-                cmd.creation_flags(0x08000000);
-                
-                if let Ok(child) = cmd.spawn() {
-                    let _ = ENGINE_PROCESS.set(child);
-                    log::info!("Managed Engine process spawned.");
-                    
-                    // Wait up to 10 seconds for the socket to appear
-                    for _ in 0..50 {
-                        if is_containerd_ready() {
-                            log::info!("Containerd socket is ready.");
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(200));
-                    }
-                }
-            } else {
-                // Engine process exists but socket missing? 
-                // Maybe it's still booting.
-                for _ in 0..10 {
-                    if is_containerd_ready() { return; }
-                    thread::sleep(Duration::from_millis(500));
-                }
-            }
-        }
-    }
+    cmd.creation_flags(0x08000000);
+    let _ = cmd.status();
 }
 
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
         start_managed_engine();
 
-        // One last check: ensure MTU is 1400 even if the engine was already "up"
-        // This handles cases where WSL was started by another command (like Debug)
-        let mut mtu_fix = StdCommand::new("wsl");
-        mtu_fix.args(["-d", "brewboxes-engine", "-u", "root", "--", "ip", "link", "set", "eth0", "mtu", "1400"]);
-        #[cfg(windows)]
-        mtu_fix.creation_flags(0x08000000);
-        let _ = mtu_fix.status();
-
         let mut cmd = StdCommand::new("wsl");
-        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
+        // Use podman directly
+        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "podman"];
         wsl_args.extend(args);
         cmd.args(wsl_args);
         #[cfg(windows)]
@@ -324,11 +236,8 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         _ => "x86_64",
     };
     
-    let nerdctl_arch = if arch == "x86_64" { "amd64" } else { "arm64" };
-
     let engine_dir = get_engine_dir(&app);
     let rootfs_tar = engine_dir.join(format!("alpine-rootfs-3.23.4-{}.tar.gz", arch));
-    let nerdctl_tar = engine_dir.join(format!("nerdctl-full-2.3.1-{}.tar.gz", nerdctl_arch));
     let install_dir = engine_dir.join("distro");
 
     if !install_dir.exists() {
@@ -350,17 +259,6 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         }
     } else {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine rootfs."})).unwrap();
-    }
-
-    // 2. Download Nerdctl (Container Management)
-    if !nerdctl_tar.exists() {
-        window.emit("progress", serde_json::json!({"type": "status", "message": format!("Downloading container runtime (Nerdctl 2.3.1 {nerdctl_arch})...")})).unwrap();
-        let mut download = StdCommand::new("curl");
-        download.args(["-L", "-f", "-o", nerdctl_tar.to_str().unwrap(), &format!("https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-{}.tar.gz", nerdctl_arch)]);
-        #[cfg(windows)]
-        download.creation_flags(0x08000000);
-        let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
-        if !status.success() { return Err(format!("Failed to download Nerdctl bundle for {}.", nerdctl_arch)); }
     }
 
     // 3. Import WSL Distro
@@ -390,32 +288,29 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         return Err(format!("WSL import failed: {}. Please ensure WSL2 is enabled on your system.", err_msg.trim())); 
     }
 
-    // 4. Extract Nerdctl inside distro
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Initializing container runtime inside engine..."})).unwrap();
+    // 4. Initialize Podman inside distro
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Installing Podman and core dependencies..."})).unwrap();
     
-    let win_tar_path = nerdctl_tar.to_str().unwrap();
-    let drive_letter = &win_tar_path[0..1].to_lowercase();
-    let remaining_path = win_tar_path[3..].replace("\\", "/");
-    let wsl_tar_path = format!("/mnt/{}/{}", drive_letter, remaining_path);
+    // Install podman and required plugins natively via apk
+    // We also include fuse-overlayfs for better storage handling in WSL
+    let setup_script = "apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow fuse-overlayfs && \
+                        echo 'root:100000:65536' > /etc/subuid && \
+                        echo 'root:100000:65536' > /etc/subgid && \
+                        mkdir -p /etc/containers && \
+                        echo -e '[storage]\ndriver = \"overlay\"\n[storage.options]\nmount_program = \"/usr/bin/fuse-overlayfs\"' > /etc/containers/storage.conf";
     
-    // Use gcompat + libc6-compat + libseccomp for maximum binary compatibility on Alpine
-    let extract_script = format!(
-        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux procps coreutils iproute2 bridge-utils && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
-        wsl_tar_path
-    );
-    
-    let mut extract = StdCommand::new("wsl");
-    extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &extract_script]);
+    let mut setup = StdCommand::new("wsl");
+    setup.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", setup_script]);
     #[cfg(windows)]
-    extract.creation_flags(0x08000000);
+    setup.creation_flags(0x08000000);
     
-    let output = extract.output().map_err(|e| format!("Failed to execute initialization: {}", e))?;
+    let output = setup.output().map_err(|e| format!("Failed to execute initialization: {}", e))?;
     if !output.status.success() { 
         let err_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Initialization failed: {}. This might be due to missing dependencies or binary incompatibility.", err_msg.trim())); 
+        return Err(format!("Initialization failed: {}. This might be due to a networking issue inside WSL.", err_msg.trim())); 
     }
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete! You can now start using BrewBoxes distros."})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine (Podman) setup complete!"})).unwrap();
     Ok(())
 }
 
