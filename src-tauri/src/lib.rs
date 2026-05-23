@@ -202,35 +202,39 @@ async fn debug_native_engine() -> Result<String, String> {
 
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
-        // Robust containerd startup and networking fixes for WSL2
+        // Ultimate containerd startup and networking fixes for WSL2
         let start_script = r#"
             # Ensure critical paths exist
             mkdir -p /run/containerd /var/log/containerd /var/lib/containerd /tmp
             chmod 1777 /tmp
 
-            # Networking Tweaks for WSL2 Stability (sticky application)
+            # Networking Tweaks for WSL2 Stability
             sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
             ip link set eth0 mtu 1400 >/dev/null 2>&1 || true
             grep -q "8.8.8.8" /etc/resolv.conf || echo "nameserver 8.8.8.8" >> /etc/resolv.conf
 
-            # Check if containerd is actually running and responding
+            # CRITICAL: Force cgroup2 mount for containerd/runc
+            if ! grep -q cgroup2 /proc/mounts; then
+                mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+            fi
+
+            # Check if containerd is actually responding
             if ! pgrep -x containerd >/dev/null || [ ! -S /run/containerd/containerd.sock ]; then
-                echo "[$(date)] Engine start/recovery initiated..." >> /var/log/containerd/boot.log
+                echo "[$(date)] Engine recovery initiated..." >> /var/log/containerd/boot.log
                 
-                # Kill stale process or remove stale socket
+                # Hard cleanup
                 pgrep -x containerd | xargs kill -9 >/dev/null 2>&1 || true
                 rm -f /run/containerd/containerd.sock
+                rm -rf /run/containerd/*
 
-                # Start containerd with full detachment (double-fork pattern)
-                # Redirecting stdin from /dev/null is crucial for backgrounding in some WSL environments
+                # Start containerd with full detachment and explicit PATH
+                # The 'sleep infinity' trick keeps the WSL distro alive
                 (setsid nohup /usr/local/bin/containerd < /dev/null > /var/log/containerd/containerd.log 2>&1 &)
+                (setsid nohup sleep infinity < /dev/null > /dev/null 2>&1 &)
                 
-                # Wait up to 10 seconds for the socket to appear
+                # Wait for socket
                 for i in $(seq 1 50); do
-                    if [ -S /run/containerd/containerd.sock ]; then
-                        echo "Socket ready after $((i*200))ms." >> /var/log/containerd/boot.log
-                        break
-                    fi
+                    [ -S /run/containerd/containerd.sock ] && break
                     sleep 0.2
                 done
             fi
@@ -240,7 +244,7 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
         start_cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
         #[cfg(windows)]
         start_cmd.creation_flags(0x08000000);
-        let _ = start_cmd.status(); // Wait for the startup script to finish its wait-loop
+        let _ = start_cmd.status();
 
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
