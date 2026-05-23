@@ -149,14 +149,19 @@ async fn debug_native_engine() -> Result<String, String> {
     if !cfg!(windows) { return Err("Only on Windows".to_string()); }
     
     let diag_script = r#"
+        echo "--- ARCHITECTURE ---"
+        uname -m
         echo "--- OS VERSION ---"
         cat /etc/alpine-release 2>/dev/null || echo "N/A"
         echo "--- COMPATIBILITY ---"
         ls -l /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "glibc symlink missing"
         echo "--- APK PACKAGES ---"
-        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables|ca-certificates" || echo "No relevant packages found"
+        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables|ca-certificates|util-linux" || echo "No relevant packages found"
         echo "--- BINARIES ---"
         ls -l /usr/local/bin/nerdctl /usr/local/bin/containerd /usr/local/bin/runc 2>/dev/null || echo "Some binaries missing"
+        echo "--- EXECUTION TEST ---"
+        /usr/local/bin/nerdctl --version 2>&1 || echo "nerdctl exec failed"
+        /usr/local/bin/containerd --version 2>&1 || echo "containerd exec failed"
         echo "--- PROCESSES ---"
         ps aux | grep -E "containerd|nerdctl" | grep -v grep
         echo "--- SOCKET ---"
@@ -225,41 +230,47 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         return Err("Native engine setup is only available on Windows.".to_string());
     }
 
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x86_64",
+        "aarch64" => "aarch64",
+        _ => "x86_64",
+    };
+    
+    let nerdctl_arch = if arch == "x86_64" { "amd64" } else { "arm64" };
+
     let engine_dir = get_engine_dir(&app);
-    let rootfs_tar = engine_dir.join("alpine-rootfs-3.23.4.tar.gz");
-    let nerdctl_tar = engine_dir.join("nerdctl-full-2.3.1.tar.gz");
+    let rootfs_tar = engine_dir.join(format!("alpine-rootfs-3.23.4-{}.tar.gz", arch));
+    let nerdctl_tar = engine_dir.join(format!("nerdctl-full-2.3.1-{}.tar.gz", nerdctl_arch));
     let install_dir = engine_dir.join("distro");
 
     if !install_dir.exists() {
         fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
     }
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Starting Native Engine setup..."})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": format!("Starting Native Engine setup ({arch})...")})).unwrap();
 
     // 1. Download Alpine RootFS
     if !rootfs_tar.exists() {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine 3.23)..."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": format!("Downloading minimal Linux base (Alpine 3.23 {arch})...")})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-f", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.4-x86_64.tar.gz"]);
+        download.args(["-L", "-f", "-o", rootfs_tar.to_str().unwrap(), &format!("https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/{}/alpine-minirootfs-3.23.4-{}.tar.gz", arch, arch)]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Alpine: {}", e))?;
         if !status.success() { 
-            return Err("Failed to download Alpine rootfs. It seems the v3.24 release is still rolling out on mirrors; we tried falling back to v3.23.4 but that also failed. Please check your connection.".to_string()); 
+            return Err(format!("Failed to download Alpine rootfs for {}. Please check your connection.", arch)); 
         }
-    } else {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine rootfs."})).unwrap();
     }
 
     // 2. Download Nerdctl (Container Management)
     if !nerdctl_tar.exists() {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl 2.3.1)..."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": format!("Downloading container runtime (Nerdctl 2.3.1 {nerdctl_arch})...")})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-f", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-amd64.tar.gz"]);
+        download.args(["-L", "-f", "-o", nerdctl_tar.to_str().unwrap(), &format!("https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-{}.tar.gz", nerdctl_arch)]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
-        if !status.success() { return Err("Failed to download Nerdctl bundle.".to_string()); }
+        if !status.success() { return Err(format!("Failed to download Nerdctl bundle for {}.", nerdctl_arch)); }
     }
 
     // 3. Import WSL Distro
