@@ -240,18 +240,20 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     if !rootfs_tar.exists() {
         window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading minimal Linux base (Alpine 3.24)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz"]);
+        download.args(["-L", "-f", "-o", rootfs_tar.to_str().unwrap(), "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/x86_64/alpine-minirootfs-3.24.0-x86_64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Alpine: {}", e))?;
-        if !status.success() { return Err("Failed to download Alpine rootfs.".to_string()); }
+        if !status.success() { return Err("Failed to download Alpine rootfs. Please check your internet connection.".to_string()); }
+    } else {
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine 3.24 rootfs."})).unwrap();
     }
 
     // 2. Download Nerdctl (Container Management)
     if !nerdctl_tar.exists() {
-        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl)..."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Downloading container runtime (Nerdctl 2.3.1)..."})).unwrap();
         let mut download = StdCommand::new("curl");
-        download.args(["-L", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-amd64.tar.gz"]);
+        download.args(["-L", "-f", "-o", nerdctl_tar.to_str().unwrap(), "https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-amd64.tar.gz"]);
         #[cfg(windows)]
         download.creation_flags(0x08000000);
         let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
@@ -268,12 +270,22 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     unregister.creation_flags(0x08000000);
     let _ = unregister.status();
 
+    // Ensure install dir is clean and exists
+    if install_dir.exists() {
+        let _ = fs::remove_dir_all(&install_dir);
+    }
+    fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+
     let mut import = StdCommand::new("wsl");
     import.args(["--import", "brewboxes-engine", install_dir.to_str().unwrap(), rootfs_tar.to_str().unwrap(), "--version", "2"]);
     #[cfg(windows)]
     import.creation_flags(0x08000000);
-    let status = import.status().map_err(|e| format!("Failed to import WSL distro: {}", e))?;
-    if !status.success() { return Err("WSL import failed. Please ensure WSL2 is enabled on your system.".to_string()); }
+    
+    let output = import.output().map_err(|e| format!("Failed to execute WSL import: {}", e))?;
+    if !output.status.success() { 
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("WSL import failed: {}. Please ensure WSL2 is enabled on your system.", err_msg.trim())); 
+    }
 
     // 4. Extract Nerdctl inside distro
     window.emit("progress", serde_json::json!({"type": "status", "message": "Initializing container runtime inside engine..."})).unwrap();
@@ -293,12 +305,14 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &extract_script]);
     #[cfg(windows)]
     extract.creation_flags(0x08000000);
-    let status = extract.status().map_err(|e| format!("Failed to extract nerdctl: {}", e))?;
-    if !status.success() { 
-        return Err("Failed to initialize container runtime inside WSL.".to_string()); 
+    
+    let output = extract.output().map_err(|e| format!("Failed to execute initialization: {}", e))?;
+    if !output.status.success() { 
+        let err_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Initialization failed: {}. This might be due to missing dependencies or binary incompatibility.", err_msg.trim())); 
     }
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete!"})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete! You can now start using BrewBoxes distros."})).unwrap();
     Ok(())
 }
 
