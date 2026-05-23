@@ -153,6 +153,10 @@ async fn debug_native_engine() -> Result<String, String> {
         uname -m
         echo "--- OS VERSION ---"
         cat /etc/alpine-release 2>/dev/null || echo "N/A"
+        echo "--- NETWORKING ---"
+        ip addr show eth0 | grep -E "inet |mtu" || echo "eth0 not found"
+        cat /etc/resolv.conf
+        ping -c 1 8.8.8.8 >/dev/null 2>&1 && echo "Internet connectivity: OK" || echo "Internet connectivity: FAILED"
         echo "--- COMPATIBILITY ---"
         ls -l /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "glibc symlink missing"
         echo "--- APK PACKAGES ---"
@@ -175,7 +179,7 @@ async fn debug_native_engine() -> Result<String, String> {
         echo "--- ENGINE LOG ---"
         [ -f /var/log/containerd/containerd.log ] && tail -n 50 /var/log/containerd/containerd.log || echo "No engine log"
         echo "--- FOREGROUND TEST ---"
-        if ! pgrep containerd > /dev/null; then
+        if ! pgrep -x containerd > /dev/null; then
             timeout 3 /usr/local/bin/containerd 2>&1 || echo "Test ended."
         else
             echo "Already running, skipping foreground test."
@@ -198,34 +202,46 @@ async fn debug_native_engine() -> Result<String, String> {
 
 fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> StdCommand {
     if engine == "native" {
-        // Robust containerd startup and socket check
+        // Robust containerd startup and networking fixes for WSL2
         let start_script = r#"
             # Ensure critical paths exist and are writable
             mkdir -p /run/containerd /var/lib/containerd /var/log/containerd /tmp
             chmod 1777 /tmp
+
+            # Networking Tweaks for WSL2 Stability
+            # 1. Disable IPv6 to prevent slow discovery/connection drops
+            sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1
+            sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1
+            
+            # 2. Lower MTU to 1400 to avoid packet fragmentation issues common in WSL2 NAT
+            ip link set eth0 mtu 1400 >/dev/null 2>&1
+
+            # 3. Ensure DNS is responsive (WSL2 relay can be flaky)
+            if ! grep -q "8.8.8.8" /etc/resolv.conf; then
+                echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+            fi
 
             # Mount cgroups v2 if not already present
             if [ ! -d /sys/fs/cgroup/containerd ]; then
                 mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
             fi
 
-            if ! pgrep containerd > /dev/null; then
-                echo "[$(date)] Starting containerd (detached)..." > /var/log/containerd/boot.log
+            if ! pgrep -x containerd > /dev/null; then
+                echo "[$(date)] Starting containerd..." > /var/log/containerd/boot.log
                 
                 # Start containerd and fully detach it from this shell session
-                # Using setsid + nohup + redirection to keep it alive in WSL
                 setsid nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
                 
-                # Wait up to 10 seconds for the socket
-                for i in $(seq 1 50); do
+                # Wait up to 15 seconds for the socket with higher frequency check
+                for i in $(seq 1 75); do
                     if [ -S /run/containerd/containerd.sock ]; then
-                        echo "Socket ready." >> /var/log/containerd/boot.log
+                        echo "Socket ready after $i checks." >> /var/log/containerd/boot.log
                         break
                     fi
-                    if ! pgrep containerd > /dev/null; then
-                        echo "Fatal: containerd process exited. Last 10 lines of log:" >> /var/log/containerd/boot.log
-                        tail -n 10 /var/log/containerd/containerd.log >> /var/log/containerd/boot.log
-                        break
+                    if ! pgrep -x containerd > /dev/null; then
+                        echo "Fatal: containerd process exited. Last 20 lines of log:" >> /var/log/containerd/boot.log
+                        tail -n 20 /var/log/containerd/containerd.log >> /var/log/containerd/boot.log
+                        exit 1
                     fi
                     sleep 0.2
                 done
@@ -236,7 +252,12 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
         start_cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
         #[cfg(windows)]
         start_cmd.creation_flags(0x08000000);
-        let _ = start_cmd.status();
+        
+        if let Ok(status) = start_cmd.status() {
+            if !status.success() {
+                log::error!("Native Engine startup script failed");
+            }
+        }
 
         let mut cmd = StdCommand::new("wsl");
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
