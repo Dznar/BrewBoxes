@@ -282,12 +282,13 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     window.emit("progress", serde_json::json!({"type": "status", "message": "Installing Podman and core dependencies..."})).unwrap();
     
     // Install podman and required plugins natively via apk
-    // We also include fuse-overlayfs for better storage handling in WSL
-    let setup_script = "apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow fuse-overlayfs && \
+    // We switch to 'vfs' driver for absolute stability on WSL2 filesystems,
+    // avoiding the 'readlink: invalid argument' errors seen with overlay.
+    let setup_script = "apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow && \
                         echo 'root:100000:65536' > /etc/subuid && \
                         echo 'root:100000:65536' > /etc/subgid && \
                         mkdir -p /etc/containers && \
-                        echo -e '[storage]\ndriver = \"overlay\"\n[storage.options]\nmount_program = \"/usr/bin/fuse-overlayfs\"' > /etc/containers/storage.conf";
+                        echo -e '[storage]\ndriver = \"vfs\"\n[engine]\ncgroup_manager = \"cgroupfs\"' > /etc/containers/storage.conf";
     
     let mut setup = StdCommand::new("wsl");
     setup.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", setup_script]);
@@ -300,7 +301,7 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         return Err(format!("Initialization failed: {}. This might be due to a networking issue inside WSL.", err_msg.trim())); 
     }
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine (Podman) setup complete!"})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine (Podman VFS) setup complete!"})).unwrap();
     Ok(())
 }
 
@@ -415,96 +416,54 @@ async fn launch_container(
     if needs_pull {
         window.emit("progress", serde_json::json!({"type": "status", "message": format!("Image not found locally. Pulling {}...", image_tag)})).unwrap();
 
-        if cfg!(windows) || engine == "native" {
-            // Windows or Native: Use standard piped command to avoid PTY/TTY handshake hangs
-            let mut pull_cmd = run_engine_cmd(&engine, vec!["pull", &image_tag], Some(&window));
-            pull_cmd.stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            
-            let mut child = pull_cmd.spawn()
-                .map_err(|e| format!("Failed to spawn pull: {}", e))?;
+        // Use PTY for rich animated progress bars on all platforms
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| e.to_string())?;
 
-            let stdout = child.stdout.take().unwrap();
-            let stderr = child.stderr.take().unwrap();
-            let window_clone = window.clone();
-
-            window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs (Safe Mode)..."})).unwrap();
-
-            // Handle stdout
-            let window_stdout = window_clone.clone();
-            thread::spawn(move || {
-                use std::io::{BufRead, BufReader};
-                let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    if let Ok(l) = line {
-                        let _ = window_stdout.emit("progress", serde_json::json!({"type": "progress", "message": format!("{}\n", l)}));
-                    }
-                }
-            });
-
-            // Handle stderr
-            let window_stderr = window_clone.clone();
-            thread::spawn(move || {
-                use std::io::{BufRead, BufReader};
-                let reader = BufReader::new(stderr);
-                for line in reader.lines() {
-                    if let Ok(l) = line {
-                        let _ = window_stderr.emit("progress", serde_json::json!({"type": "progress", "message": format!("{}\n", l)}));
-                    }
-                }
-            });
-
-            let wait_res = child.wait().map_err(|e| format!("Failed to wait for pull: {}", e))?;
-            log::info!("Pull process exited: {:?}", wait_res);
-            
-            if !wait_res.success() {
-                return Err("Image pull failed. This usually happens if the engine crashes or loses its connection. If you're using Docker Desktop, try switching to the Native Engine in Settings.".to_string());
-            }
+        let mut cmd = if engine == "native" {
+            // For native engine on Windows, we need to wrap the WSL call for PTY
+            let mut c = CommandBuilder::new("wsl");
+            c.args(["-d", "brewboxes-engine", "-u", "root", "--", "podman", "pull", &image_tag]);
+            c
         } else {
-            // Linux (non-native): Use PTY for rich animated progress bars
-            let pty_system = native_pty_system();
-            let pair = pty_system
-                .openpty(PtySize {
-                    rows: 24,
-                    cols: 80,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|e| e.to_string())?;
+            let mut c = CommandBuilder::new(&engine);
+            c.args(["pull", &image_tag]);
+            c
+        };
 
-            let mut cmd = CommandBuilder::new(&engine);
-            // Force TTY-like behavior and color output
-            cmd.env("TERM", "xterm-256color");
-            cmd.args(["pull", &image_tag]);
+        // Force TTY-like behavior and color output
+        cmd.env("TERM", "xterm-256color");
 
-            log::info!("Spawning pull command (PTY): {} pull {}", engine, image_tag);
-            let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
-            drop(pair.slave);
+        log::info!("Spawning pull command (PTY): {:?}", cmd);
+        let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to spawn pull: {}", e))?;
+        drop(pair.slave);
 
-            window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs..."})).unwrap();
+        window.emit("progress", serde_json::json!({"type": "status", "message": "Streaming pull logs..."})).unwrap();
 
-            let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
-            let window_clone = window.clone();
+        let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let window_clone = window.clone();
 
-            thread::spawn(move || {
-                let mut buffer = [0u8; 4096]; // Larger buffer for progress chunks
-                log::info!("PTY reader thread started.");
-                while let Ok(n) = reader.read(&mut buffer) {
-                    if n == 0 { 
-                        log::info!("PTY reader reached EOF.");
-                        break; 
-                    }
-                    let output = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
-                }
-            });
-
-            let wait_res = child.wait().map_err(|e| format!("Failed to wait for pull: {}", e))?;
-            log::info!("Pull process (PTY) exited: {:?}", wait_res);
-
-            if !wait_res.success() {
-                return Err("Image pull failed.".to_string());
+        thread::spawn(move || {
+            let mut buffer = [0u8; 8192]; // Larger buffer for progress chunks
+            while let Ok(n) = reader.read(&mut buffer) {
+                if n == 0 { break; }
+                let output = String::from_utf8_lossy(&buffer[..n]).to_string();
+                let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
             }
+        });
+
+        let wait_res = child.wait().map_err(|e| format!("Failed to wait for pull: {}", e))?;
+        log::info!("Pull process (PTY) exited: {:?}", wait_res);
+
+        if !wait_res.success() {
+            return Err("Image pull failed. This usually happens if the extraction crashes or connection drops. Click Launch again to resume.".to_string());
         }
         window.emit("progress", serde_json::json!({"type": "status", "message": "Pull completed!"})).unwrap();
     } else {
