@@ -156,7 +156,7 @@ async fn debug_native_engine() -> Result<String, String> {
         echo "--- COMPATIBILITY ---"
         ls -l /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "glibc symlink missing"
         echo "--- APK PACKAGES ---"
-        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables|ca-certificates|util-linux" || echo "No relevant packages found"
+        apk list -I 2>/dev/null | grep -E "compat|gcc|seccomp|iptables|ca-certificates|util-linux|procps|coreutils" || echo "No relevant packages found"
         echo "--- BINARIES ---"
         ls -l /usr/local/bin/nerdctl /usr/local/bin/containerd /usr/local/bin/runc 2>/dev/null || echo "Some binaries missing"
         echo "--- EXECUTION TEST ---"
@@ -166,6 +166,8 @@ async fn debug_native_engine() -> Result<String, String> {
         ps aux | grep -E "containerd|nerdctl" | grep -v grep
         echo "--- SOCKET ---"
         ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
+        echo "--- LOGS DIRECTORY ---"
+        ls -R /var/log/containerd 2>/dev/null || echo "/var/log/containerd missing"
         echo "--- BOOT LOG ---"
         [ -f /var/log/containerd/boot.log ] && cat /var/log/containerd/boot.log || echo "No boot log"
         echo "--- ENGINE LOG ---"
@@ -196,21 +198,21 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
     if engine == "native" {
         // Robust containerd startup and socket check
         let start_script = r#"
-            mkdir -p /run/containerd /var/lib/containerd /var/log/containerd
-            if ! pgrep -x containerd > /dev/null; then
-                echo "Starting containerd..." > /var/log/containerd/boot.log
-                # Start containerd and capture immediate errors
-                nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
+            # Ensure critical paths exist and are writable
+            mkdir -p /run/containerd /var/lib/containerd /var/log/containerd /tmp
+            chmod 1777 /tmp
+
+            if ! pgrep containerd > /dev/null; then
+                echo "[$(date)] Starting containerd..." > /var/log/containerd/boot.log
                 
-                # Wait up to 10 seconds for the socket to appear
+                # Start containerd in background
+                /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
+                
+                # Wait up to 10 seconds for the socket
                 for i in $(seq 1 50); do
-                    if [ -S /run/containerd/containerd.sock ]; then
-                        echo "Socket found!" >> /var/log/containerd/boot.log
-                        break
-                    fi
-                    if ! pgrep -x containerd > /dev/null; then
-                        echo "containerd died early. Last logs:" >> /var/log/containerd/boot.log
-                        tail -n 20 /var/log/containerd/containerd.log >> /var/log/containerd/boot.log
+                    [ -S /run/containerd/containerd.sock ] && echo "Socket ready." >> /var/log/containerd/boot.log && break
+                    if ! pgrep containerd > /dev/null; then
+                        echo "Fatal: containerd process exited." >> /var/log/containerd/boot.log
                         break
                     fi
                     sleep 0.2
@@ -723,6 +725,4 @@ pub fn run() {
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
-}
-e running tauri application");
 }
