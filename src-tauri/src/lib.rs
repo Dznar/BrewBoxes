@@ -166,8 +166,10 @@ async fn debug_native_engine() -> Result<String, String> {
         ps aux | grep -E "containerd|nerdctl" | grep -v grep
         echo "--- SOCKET ---"
         ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
-        echo "--- LOGS ---"
-        [ -f /var/log/containerd.log ] && tail -n 50 /var/log/containerd.log || echo "No logs found"
+        echo "--- BOOT LOG ---"
+        [ -f /var/log/containerd/boot.log ] && cat /var/log/containerd/boot.log || echo "No boot log"
+        echo "--- ENGINE LOG ---"
+        [ -f /var/log/containerd/containerd.log ] && tail -n 50 /var/log/containerd/containerd.log || echo "No engine log"
         echo "--- DEPENDENCIES ---"
         echo "nerdctl:"
         ldd /usr/local/bin/nerdctl 2>&1
@@ -695,6 +697,18 @@ pub fn run() {
         list_private_containers,
         launch_container,
         stop_container,
+        delete_container,
+        open_in_browser,
+        open_container_window,
+        setup_native_engine,
+        check_engine_status,
+        reset_native_engine,
+        debug_native_engine
+    ])
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+}
+iner,
         delete_container,
         open_in_browser,
         open_container_window,
