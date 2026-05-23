@@ -169,7 +169,8 @@ async fn debug_native_engine() -> Result<String, String> {
         echo "--- PROCESSES ---"
         ps aux | grep -E "containerd|nerdctl" | grep -v grep
         echo "--- CGROUPS ---"
-        [ -d /sys/fs/cgroup/containerd ] && echo "cgroup2 mounted" || echo "cgroup2 missing"
+        grep -q cgroup2 /proc/filesystems && echo "Kernel supports cgroup2" || echo "Kernel lacks cgroup2"
+        mount | grep cgroup2 || echo "cgroup2 not mounted"
         echo "--- SOCKET ---"
         ls -l /run/containerd/containerd.sock 2>/dev/null || echo "Socket missing"
         echo "--- LOGS DIRECTORY ---"
@@ -180,7 +181,7 @@ async fn debug_native_engine() -> Result<String, String> {
         [ -f /var/log/containerd/containerd.log ] && tail -n 50 /var/log/containerd/containerd.log || echo "No engine log"
         echo "--- FOREGROUND TEST ---"
         if ! pgrep -x containerd > /dev/null; then
-            timeout 3 /usr/local/bin/containerd 2>&1 || echo "Test ended."
+            timeout 5 /usr/local/bin/containerd 2>&1 || echo "Test ended."
         else
             echo "Already running, skipping foreground test."
         fi
