@@ -202,17 +202,27 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
             mkdir -p /run/containerd /var/lib/containerd /var/log/containerd /tmp
             chmod 1777 /tmp
 
+            # Mount cgroups v2 if not already present
+            if [ ! -d /sys/fs/cgroup/containerd ]; then
+                mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+            fi
+
             if ! pgrep containerd > /dev/null; then
-                echo "[$(date)] Starting containerd..." > /var/log/containerd/boot.log
+                echo "[$(date)] Starting containerd (detached)..." > /var/log/containerd/boot.log
                 
-                # Start containerd in background
-                /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
+                # Start containerd and fully detach it from this shell session
+                # Using setsid + nohup + redirection to keep it alive in WSL
+                setsid nohup /usr/local/bin/containerd > /var/log/containerd/containerd.log 2>&1 &
                 
                 # Wait up to 10 seconds for the socket
                 for i in $(seq 1 50); do
-                    [ -S /run/containerd/containerd.sock ] && echo "Socket ready." >> /var/log/containerd/boot.log && break
+                    if [ -S /run/containerd/containerd.sock ]; then
+                        echo "Socket ready." >> /var/log/containerd/boot.log
+                        break
+                    fi
                     if ! pgrep containerd > /dev/null; then
-                        echo "Fatal: containerd process exited." >> /var/log/containerd/boot.log
+                        echo "Fatal: containerd process exited. Last 10 lines of log:" >> /var/log/containerd/boot.log
+                        tail -n 10 /var/log/containerd/containerd.log >> /var/log/containerd/boot.log
                         break
                     fi
                     sleep 0.2
