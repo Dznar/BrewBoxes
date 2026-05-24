@@ -91,27 +91,9 @@ function App() {
         if (data.type === 'status') {
           addStatusMessage(`[INFO] ${data.message}`);
         } else if (data.type === 'progress') {
+          // Keep the raw message (with ANSI codes) for the terminal renderer
           if (data.message) {
-            // Robust carriage return (\r) handling for terminal-like behavior
-            if (data.message.includes('\r')) {
-              const parts = data.message.split('\r');
-              // The last non-empty part is usually the most recent progress update
-              const latestUpdate = parts.filter(p => p.length > 0).pop();
-              
-              if (latestUpdate) {
-                setStatusMessages(prev => {
-                  const newMessages = [...prev];
-                  if (newMessages.length > 0) {
-                    newMessages[newMessages.length - 1] = latestUpdate;
-                  } else {
-                    newMessages.push(latestUpdate);
-                  }
-                  return newMessages;
-                });
-              }
-            } else {
-              addStatusMessage(data.message);
-            }
+            addStatusMessage(data.message);
           }
         }
       });
