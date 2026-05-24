@@ -172,12 +172,12 @@ function App() {
             </div>
             <div>
               <h3 className="text-xl font-bold text-amber-200">
-                {engineStatus ? 'Native Engine Active' : 'Native Engine Not Ready'}
+                {engineStatus ? 'Engine Active' : 'No Engine Found'}
               </h3>
               <p className="text-amber-100/70">
                 {engineStatus 
-                  ? 'The stable container engine is ready to use.' 
-                  : 'Docker/Podman are disabled on Windows. Please set up the reliable Native Engine.'}
+                  ? 'The container engine is ready to use.' 
+                  : 'Podman not found. Please install Podman or set up the Native Engine.'}
               </p>
             </div>
           </div>

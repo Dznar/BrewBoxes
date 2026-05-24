@@ -88,7 +88,18 @@ fn get_engine_dir(app: &AppHandle) -> PathBuf {
 
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
-        // Strictly use Native Engine on Windows
+        // Check for Podman first on Windows
+        let mut check_podman = StdCommand::new("podman");
+        check_podman.arg("--version");
+        #[cfg(windows)]
+        check_podman.creation_flags(0x08000000);
+
+        if check_podman.output().is_ok() {
+            log::info!("Detected podman via PATH");
+            return Ok("podman".to_string());
+        }
+
+        // Fallback to Native Engine on Windows
         let mut check_distro = StdCommand::new("wsl");
         check_distro.args(["-l", "-q"]);
         #[cfg(windows)]
@@ -482,7 +493,7 @@ async fn launch_container(
         } else {
             "Engine not responsive".to_string()
         };
-        return Err(format!("Container engine is not running or responsive. Please ensure Docker/Podman is started, or use the Native Engine. Error: {}", err_msg));
+        return Err(format!("Container engine is not running or responsive. Please ensure Podman is started, or use the Native Engine. Error: {}", err_msg));
     }
 
     let image_tag = if distro == "alpine" && gui == "xfce" {
