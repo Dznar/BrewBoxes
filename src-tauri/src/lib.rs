@@ -162,8 +162,14 @@ async fn debug_native_engine() -> Result<String, String> {
         else
             echo "Neither curl nor wget found."
         fi
+        echo "--- CONFIG FILES ---"
+        ls -l /etc/containers/registries.conf /etc/containers/policy.json /etc/containers/storage.conf /etc/containers/containers.conf 2>/dev/null || echo "Some config files missing"
+        echo "--- REGISTRIES ---"
+        cat /etc/containers/registries.conf 2>/dev/null || echo "registries.conf not found"
+        echo "--- POLICY ---"
+        cat /etc/containers/policy.json 2>/dev/null || echo "policy.json not found"
         echo "--- APK PACKAGES ---"
-        apk list -I 2>/dev/null | grep -E "podman|crun|conmon|iptables|ca-certificates|util-linux|procps|coreutils" || echo "No relevant packages found"
+        apk list -I 2>/dev/null | grep -E "podman|crun|conmon|iptables|ca-certificates|util-linux|procps|coreutils|containers-common|cni-plugins" || echo "No relevant packages found"
         echo "--- BINARIES ---"
         ls -l /usr/bin/podman /usr/bin/crun /usr/bin/conmon 2>/dev/null || echo "Some binaries missing"
         echo "--- EXECUTION TEST ---"
@@ -299,12 +305,14 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     // We switch to 'vfs' driver for absolute stability on WSL2 filesystems,
     // avoiding the 'readlink: invalid argument' errors seen with overlay.
     let setup_script = "ip link set dev eth0 mtu 1400 || true && \
-                        apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow curl && \
+                        apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow curl containers-common && \
                         echo 'root:100000:65536' > /etc/subuid && \
                         echo 'root:100000:65536' > /etc/subgid && \
                         mkdir -p /etc/containers && \
                         echo -e '[storage]\ndriver = \"vfs\"' > /etc/containers/storage.conf && \
-                        echo -e '[engine]\ncgroup_manager = \"cgroupfs\"' > /etc/containers/containers.conf";
+                        echo -e '[engine]\ncgroup_manager = \"cgroupfs\"' > /etc/containers/containers.conf && \
+                        [ ! -f /etc/containers/policy.json ] && echo '{\"default\":[{\"type\":\"insecureAcceptAnything\"}]}' > /etc/containers/policy.json || true && \
+                        [ ! -f /etc/containers/registries.conf ] && echo -e 'unqualified-search-registries = [\"docker.io\", \"quay.io\"]' > /etc/containers/registries.conf || true";
     
     let mut setup = StdCommand::new("wsl");
     setup.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", setup_script]);
