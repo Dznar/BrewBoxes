@@ -91,9 +91,22 @@ function App() {
         if (data.type === 'status') {
           addStatusMessage(`[INFO] ${data.message}`);
         } else if (data.type === 'progress') {
-          // Keep the raw message (with ANSI codes) for the terminal renderer
           if (data.message) {
-            addStatusMessage(data.message);
+            // Check for carriage return (\r) which usually indicates a progress bar update
+            if (data.message.includes('\r')) {
+              setStatusMessages(prev => {
+                const newMessages = [...prev];
+                // Replace the last message with the new progress update
+                if (newMessages.length > 0) {
+                  newMessages[newMessages.length - 1] = data.message.replace(/\r/g, '');
+                } else {
+                  newMessages.push(data.message.replace(/\r/g, ''));
+                }
+                return newMessages;
+              });
+            } else {
+              addStatusMessage(data.message);
+            }
           }
         }
       });

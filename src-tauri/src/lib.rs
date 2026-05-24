@@ -89,7 +89,11 @@ fn get_engine_dir(app: &AppHandle) -> PathBuf {
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
         // Strictly use Native Engine on Windows
+        #[cfg(windows)]
+        let mut check_distro = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+        #[cfg(not(windows))]
         let mut check_distro = StdCommand::new("wsl");
+        
         check_distro.args(["-l", "-q"]);
         #[cfg(windows)]
         check_distro.creation_flags(0x08000000);
@@ -122,7 +126,11 @@ fn detect_engine() -> Result<String, String> {
 async fn reset_native_engine(app: AppHandle) -> Result<(), String> {
     if !cfg!(windows) { return Err("Only on Windows".to_string()); }
     
+    #[cfg(windows)]
+    let mut unregister = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    #[cfg(not(windows))]
     let mut unregister = StdCommand::new("wsl");
+
     unregister.args(["--unregister", "brewboxes-engine"]);
     #[cfg(windows)]
     unregister.creation_flags(0x08000000);
@@ -160,7 +168,7 @@ async fn debug_native_engine() -> Result<String, String> {
         elif command -v wget >/dev/null; then
             wget -q --spider --timeout=5 https://lscr.io && echo "OCI Connectivity (wget): OK" || echo "OCI Connectivity (wget): FAILED"
         else
-            echo "Neither curl nor wget found."
+            echo "Neither_curl_nor_wget_found."
         fi
         echo "--- CONFIG FILES ---"
         ls -l /etc/containers/registries.conf /etc/containers/policy.json /etc/containers/storage.conf /etc/containers/containers.conf 2>/dev/null || echo "Some config files missing"
@@ -181,7 +189,11 @@ async fn debug_native_engine() -> Result<String, String> {
         /usr/bin/podman images
     "#;
 
+    #[cfg(windows)]
+    let mut cmd = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    #[cfg(not(windows))]
     let mut cmd = StdCommand::new("wsl");
+
     cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", diag_script]);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -206,7 +218,11 @@ fn start_managed_engine() {
         fi
     "#;
 
+    #[cfg(windows)]
+    let mut cmd = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    #[cfg(not(windows))]
     let mut cmd = StdCommand::new("wsl");
+
     cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", start_script]);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000);
@@ -217,7 +233,11 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
     if engine == "native" {
         start_managed_engine();
 
+        #[cfg(windows)]
+        let mut cmd = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+        #[cfg(not(windows))]
         let mut cmd = StdCommand::new("wsl");
+
         // Use podman directly
         let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "podman"];
         wsl_args.extend(args);
@@ -310,10 +330,13 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
                         echo 'root:100000:65536' > /etc/subgid && \
                         mkdir -p /etc/containers && \
                         echo -e '[storage]\ndriver = \"vfs\"' > /etc/containers/storage.conf && \
-                        echo -e '[engine]\ncgroup_manager = \"cgroupfs\"' > /etc/containers/containers.conf && \
+                        echo -e '[engine]\ncgroup_manager = \"cgroupfs\"\nmax_concurrent_downloads = 3' > /etc/containers/containers.conf && \
                         [ ! -f /etc/containers/policy.json ] && echo '{\"default\":[{\"type\":\"insecureAcceptAnything\"}]}' > /etc/containers/policy.json || true && \
                         [ ! -f /etc/containers/registries.conf ] && echo -e 'unqualified-search-registries = [\"docker.io\", \"quay.io\"]' > /etc/containers/registries.conf || true";
     
+    #[cfg(windows)]
+    let mut setup = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    #[cfg(not(windows))]
     let mut setup = StdCommand::new("wsl");
     setup.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", setup_script]);
     #[cfg(windows)]
@@ -476,7 +499,12 @@ async fn launch_container(
 
         let mut cmd = if engine == "native" {
             // For native engine on Windows, we need to wrap the WSL call for PTY
+            // Use absolute path to wsl.exe for robustness
+            #[cfg(windows)]
+            let mut c = CommandBuilder::new("C:\\Windows\\System32\\wsl.exe");
+            #[cfg(not(windows))]
             let mut c = CommandBuilder::new("wsl");
+            
             c.args(["-d", "brewboxes-engine", "-u", "root", "--", "podman", "pull", &image_tag]);
             c
         } else {
@@ -498,11 +526,15 @@ async fn launch_container(
         let window_clone = window.clone();
 
         thread::spawn(move || {
-            let mut buffer = [0u8; 8192]; // Larger buffer for progress chunks
+            let mut buffer = [0u8; 1024]; // Smaller chunks for more frequent updates without flooding
             while let Ok(n) = reader.read(&mut buffer) {
                 if n == 0 { break; }
                 let output = String::from_utf8_lossy(&buffer[..n]).to_string();
                 let _ = window_clone.emit("progress", serde_json::json!({"type": "progress", "message": output}));
+                
+                // Small sleep to prevent saturating the Tauri event bridge on Windows
+                #[cfg(windows)]
+                thread::sleep(Duration::from_millis(5));
             }
         });
 
