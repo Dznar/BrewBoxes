@@ -88,7 +88,32 @@ fn get_engine_dir(app: &AppHandle) -> PathBuf {
 
 fn detect_engine() -> Result<String, String> {
     if cfg!(windows) {
-        // Strictly use Native Engine on Windows
+        // 1. Check for system podman (Official Podman for Windows)
+        // We exclude Docker because its energy-saving modes can interfere with pulls.
+        let engines = vec!["podman"];
+        for engine in engines {
+            let mut cmd = StdCommand::new("where");
+            cmd.arg(engine);
+            #[cfg(windows)]
+            cmd.creation_flags(0x08000000);
+            
+            if let Ok(output) = cmd.output() {
+                if output.status.success() {
+                    // Double check if engine is responsive (machine is started)
+                    let mut check = StdCommand::new(engine);
+                    check.arg("version");
+                    #[cfg(windows)]
+                    check.creation_flags(0x08000000);
+                    
+                    if check.output().map(|o| o.status.success()).unwrap_or(false) {
+                        log::info!("Detected system engine on Windows: {}", engine);
+                        return Ok(engine.to_string());
+                    }
+                }
+            }
+        }
+
+        // 2. Fallback to Native Engine
         #[cfg(windows)]
         let mut check_distro = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
         #[cfg(not(windows))]
@@ -109,7 +134,7 @@ fn detect_engine() -> Result<String, String> {
                 return Ok("native".to_string());
             }
         }
-        Err("Native Engine not found. Please use the 'Setup Native Engine' button.".to_string())
+        Err("No container engine found. Please install Podman for Windows or use the 'Setup Native Engine' button.".to_string())
     } else {
         let engines = vec!["podman", "docker"];
         for engine in engines {

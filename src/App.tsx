@@ -92,18 +92,23 @@ function App() {
           addStatusMessage(`[INFO] ${data.message}`);
         } else if (data.type === 'progress') {
           if (data.message) {
-            // Check for carriage return (\r) which usually indicates a progress bar update
+            // Robust carriage return (\r) handling for terminal-like behavior
             if (data.message.includes('\r')) {
-              setStatusMessages(prev => {
-                const newMessages = [...prev];
-                // Replace the last message with the new progress update
-                if (newMessages.length > 0) {
-                  newMessages[newMessages.length - 1] = data.message.replace(/\r/g, '');
-                } else {
-                  newMessages.push(data.message.replace(/\r/g, ''));
-                }
-                return newMessages;
-              });
+              const parts = data.message.split('\r');
+              // The last non-empty part is usually the most recent progress update
+              const latestUpdate = parts.filter(p => p.length > 0).pop();
+              
+              if (latestUpdate) {
+                setStatusMessages(prev => {
+                  const newMessages = [...prev];
+                  if (newMessages.length > 0) {
+                    newMessages[newMessages.length - 1] = latestUpdate;
+                  } else {
+                    newMessages.push(latestUpdate);
+                  }
+                  return newMessages;
+                });
+              }
             } else {
               addStatusMessage(data.message);
             }
