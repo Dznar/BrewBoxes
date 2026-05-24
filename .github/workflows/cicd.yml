@@ -7,19 +7,47 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            name: windows
+            artifact_path: src-tauri/target/release/bundle/nsis/*.exe
+          - platform: macos-latest
+            name: macos
+            artifact_path: src-tauri/target/release/bundle/dmg/*.dmg
+          - platform: ubuntu-22.04
+            name: linux
+            artifact_path: src-tauri/target/release/bundle/deb/*.deb
+
+    runs-on: ${{ matrix.platform }}
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Install dependencies (Linux only)
+      if: matrix.platform == 'ubuntu-22.04'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '25'
+        node-version: '22'
+        cache: 'npm'
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
+
+    - name: Rust cache
+      uses: swatinem/rust-cache@v2
+      with:
+        workspaces: './src-tauri -> target'
 
     - name: Install frontend dependencies
       run: npm install
@@ -27,8 +55,8 @@ jobs:
     - name: Build the application
       run: npm run build
 
-    - name: Upload artifacts (Windows)
+    - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: brewboxes-windows 
-        path: src-tauri/target/release/bundle/nsis/*.exe
+        name: brewboxes-${{ matrix.name }}
+        path: ${{ matrix.artifact_path }}
