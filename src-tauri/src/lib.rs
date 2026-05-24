@@ -263,8 +263,7 @@ fn run_engine_cmd(engine: &str, args: Vec<&str>, _window: Option<&Window>) -> St
         #[cfg(not(windows))]
         let mut cmd = StdCommand::new("wsl");
 
-        // Use podman directly
-        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "podman"];
+        let mut wsl_args = vec!["-d", "brewboxes-engine", "-u", "root", "--", "/usr/local/bin/nerdctl"];
         wsl_args.extend(args);
         cmd.args(wsl_args);
         #[cfg(windows)]
@@ -291,8 +290,10 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         _ => "x86_64",
     };
     
+    let nerdctl_arch = if arch == "x86_64" { "amd64" } else { "arm64" };
     let engine_dir = get_engine_dir(&app);
     let rootfs_tar = engine_dir.join(format!("alpine-rootfs-3.23.4-{}.tar.gz", arch));
+    let nerdctl_tar = engine_dir.join(format!("nerdctl-full-2.3.1-{}.tar.gz", nerdctl_arch));
     let install_dir = engine_dir.join("distro");
 
     if !install_dir.exists() {
@@ -316,11 +317,26 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         window.emit("progress", serde_json::json!({"type": "status", "message": "Using existing Alpine rootfs."})).unwrap();
     }
 
+    // 2. Download Nerdctl (Container Management)
+    if !nerdctl_tar.exists() {
+        window.emit("progress", serde_json::json!({"type": "status", "message": format!("Downloading container runtime (Nerdctl 2.3.1 {nerdctl_arch})...")})).unwrap();
+        let mut download = StdCommand::new("curl");
+        download.args(["-L", "-f", "-o", nerdctl_tar.to_str().unwrap(), &format!("https://github.com/containerd/nerdctl/releases/download/v2.3.1/nerdctl-full-2.3.1-linux-{}.tar.gz", nerdctl_arch)]);
+        #[cfg(windows)]
+        download.creation_flags(0x08000000);
+        let status = download.status().map_err(|e| format!("Failed to download Nerdctl: {}", e))?;
+        if !status.success() { return Err(format!("Failed to download Nerdctl bundle for {}.", nerdctl_arch)); }
+    }
+
     // 3. Import WSL Distro
     window.emit("progress", serde_json::json!({"type": "status", "message": "Importing BrewBoxes Engine into WSL..."})).unwrap();
     
     // Unregister first if exists to allow clean re-setup
+    #[cfg(windows)]
+    let mut unregister = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    #[cfg(not(windows))]
     let mut unregister = StdCommand::new("wsl");
+
     unregister.args(["--unregister", "brewboxes-engine"]);
     #[cfg(windows)]
     unregister.creation_flags(0x08000000);
@@ -332,7 +348,11 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     }
     fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
 
+    #[cfg(windows)]
+    let mut import = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    #[cfg(not(windows))]
     let mut import = StdCommand::new("wsl");
+
     import.args(["--import", "brewboxes-engine", install_dir.to_str().unwrap(), rootfs_tar.to_str().unwrap(), "--version", "2"]);
     #[cfg(windows)]
     import.creation_flags(0x08000000);
@@ -343,37 +363,36 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
         return Err(format!("WSL import failed: {}. Please ensure WSL2 is enabled on your system.", err_msg.trim())); 
     }
 
-    // 4. Initialize Podman inside distro
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Installing Podman and core dependencies..."})).unwrap();
+    // 4. Extract Nerdctl inside distro
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Initializing container runtime inside engine..."})).unwrap();
     
-    // Install podman and required plugins natively via apk
-    // We switch to 'vfs' driver for absolute stability on WSL2 filesystems,
-    // avoiding the 'readlink: invalid argument' errors seen with overlay.
-    let setup_script = "ip link set dev eth0 mtu 1400 || true && \
-                        apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow curl containers-common && \
-                        echo 'root:100000:65536' > /etc/subuid && \
-                        echo 'root:100000:65536' > /etc/subgid && \
-                        mkdir -p /etc/containers && \
-                        echo -e '[storage]\ndriver = \"vfs\"' > /etc/containers/storage.conf && \
-                        echo -e '[engine]\ncgroup_manager = \"cgroupfs\"\nmax_concurrent_downloads = 3' > /etc/containers/containers.conf && \
-                        [ ! -f /etc/containers/policy.json ] && echo '{\"default\":[{\"type\":\"insecureAcceptAnything\"}]}' > /etc/containers/policy.json || true && \
-                        [ ! -f /etc/containers/registries.conf ] && echo -e 'unqualified-search-registries = [\"docker.io\", \"quay.io\"]' > /etc/containers/registries.conf || true";
+    let win_tar_path = nerdctl_tar.to_str().unwrap();
+    let drive_letter = &win_tar_path[0..1].to_lowercase();
+    let remaining_path = win_tar_path[3..].replace("\\", "/");
+    let wsl_tar_path = format!("/mnt/{}/{}", drive_letter, remaining_path);
+    
+    // Use gcompat + libc6-compat + libseccomp for maximum binary compatibility on Alpine
+    let extract_script = format!(
+        "apk add --no-cache libc6-compat libgcc gcompat libseccomp iptables ca-certificates util-linux procps coreutils iproute2 bridge-utils && mkdir -p /usr/local/bin && tar -C /usr/local -xzvf \"{}\"", 
+        wsl_tar_path
+    );
     
     #[cfg(windows)]
-    let mut setup = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
+    let mut extract = StdCommand::new("C:\\Windows\\System32\\wsl.exe");
     #[cfg(not(windows))]
-    let mut setup = StdCommand::new("wsl");
-    setup.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", setup_script]);
+    let mut extract = StdCommand::new("wsl");
+
+    extract.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", &extract_script]);
     #[cfg(windows)]
-    setup.creation_flags(0x08000000);
+    extract.creation_flags(0x08000000);
     
-    let output = setup.output().map_err(|e| format!("Failed to execute initialization: {}", e))?;
+    let output = extract.output().map_err(|e| format!("Failed to execute initialization: {}", e))?;
     if !output.status.success() { 
         let err_msg = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Initialization failed: {}. This might be due to a networking issue inside WSL.", err_msg.trim())); 
+        return Err(format!("Initialization failed: {}. This might be due to missing dependencies or binary incompatibility.", err_msg.trim())); 
     }
 
-    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine (Podman VFS) setup complete!"})).unwrap();
+    window.emit("progress", serde_json::json!({"type": "status", "message": "Native Engine setup complete! You can now start using BrewBoxes distros."})).unwrap();
     Ok(())
 }
 
