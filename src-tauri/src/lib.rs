@@ -139,6 +139,8 @@ async fn debug_native_engine() -> Result<String, String> {
     if !cfg!(windows) { return Err("Only on Windows".to_string()); }
     
     let diag_script = r#"
+        echo "--- DATE ---"
+        date
         echo "--- ARCHITECTURE ---"
         uname -m
         echo "--- OS VERSION ---"
@@ -146,8 +148,20 @@ async fn debug_native_engine() -> Result<String, String> {
         echo "--- NETWORKING ---"
         ip addr show eth0 | grep -E "inet |mtu" || echo "eth0 not found"
         cat /etc/resolv.conf
+        echo "--- DNS TEST ---"
+        cat /etc/resolv.conf
+        nslookup google.com 8.8.8.8 >/dev/null 2>&1 && echo "DNS (8.8.8.8): OK" || echo "DNS (8.8.8.8): FAILED"
+        nslookup google.com >/dev/null 2>&1 && echo "DNS (System): OK" || echo "DNS (System): FAILED"
+        echo "--- PING TEST ---"
+        ping -c 1 8.8.8.8 >/dev/null 2>&1 && echo "Ping 8.8.8.8: OK" || echo "Ping 8.8.8.8: FAILED"
         echo "Testing connection to OCI Registry..."
-        curl -I -s --connect-timeout 5 https://lscr.io && echo "OCI Connectivity: OK" || echo "OCI Connectivity: FAILED"
+        if command -v curl >/dev/null; then
+            curl -I -s --connect-timeout 5 https://lscr.io && echo "OCI Connectivity (curl): OK" || echo "OCI Connectivity (curl): FAILED"
+        elif command -v wget >/dev/null; then
+            wget -q --spider --timeout=5 https://lscr.io && echo "OCI Connectivity (wget): OK" || echo "OCI Connectivity (wget): FAILED"
+        else
+            echo "Neither curl nor wget found."
+        fi
         echo "--- APK PACKAGES ---"
         apk list -I 2>/dev/null | grep -E "podman|crun|conmon|iptables|ca-certificates|util-linux|procps|coreutils" || echo "No relevant packages found"
         echo "--- BINARIES ---"
@@ -284,11 +298,13 @@ async fn setup_native_engine(window: Window, app: AppHandle) -> Result<(), Strin
     // Install podman and required plugins natively via apk
     // We switch to 'vfs' driver for absolute stability on WSL2 filesystems,
     // avoiding the 'readlink: invalid argument' errors seen with overlay.
-    let setup_script = "apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow && \
+    let setup_script = "ip link set dev eth0 mtu 1400 || true && \
+                        apk add --no-cache podman conmon crun cni-plugins iproute2 bridge-utils iptables ca-certificates shadow curl && \
                         echo 'root:100000:65536' > /etc/subuid && \
                         echo 'root:100000:65536' > /etc/subgid && \
                         mkdir -p /etc/containers && \
-                        echo -e '[storage]\ndriver = \"vfs\"\n[engine]\ncgroup_manager = \"cgroupfs\"' > /etc/containers/storage.conf";
+                        echo -e '[storage]\ndriver = \"vfs\"' > /etc/containers/storage.conf && \
+                        echo -e '[engine]\ncgroup_manager = \"cgroupfs\"' > /etc/containers/containers.conf";
     
     let mut setup = StdCommand::new("wsl");
     setup.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", setup_script]);
@@ -414,6 +430,29 @@ async fn launch_container(
     };
 
     if needs_pull {
+        if engine == "native" {
+            // Pre-check connectivity on native engine to avoid long hangs
+            // We try a simple DNS lookup first as it's fastest and most likely to fail early
+            let mut dns_check = StdCommand::new("wsl");
+            dns_check.args(["-d", "brewboxes-engine", "-u", "root", "--", "nslookup", "lscr.io"]);
+            #[cfg(windows)]
+            dns_check.creation_flags(0x08000000);
+            
+            if !dns_check.status().map(|s| s.success()).unwrap_or(false) {
+                return Err("DNS resolution failed inside the Native Engine. This usually means WSL has no internet access. Try restarting WSL (wsl --shutdown) or checking your firewall.".to_string());
+            }
+
+            // Then try a quick TCP connect if curl exists
+            let mut check_cmd = StdCommand::new("wsl");
+            check_cmd.args(["-d", "brewboxes-engine", "-u", "root", "--", "sh", "-c", "command -v curl >/dev/null && curl -I -s --connect-timeout 2 https://lscr.io || command -v wget >/dev/null && wget -q --spider --timeout=2 https://lscr.io || true"]);
+            #[cfg(windows)]
+            check_cmd.creation_flags(0x08000000);
+            
+            if !check_cmd.status().map(|s| s.success()).unwrap_or(false) {
+                return Err("Registry (lscr.io) is unreachable from inside the Native Engine. If you are on a VPN or restrictive network, this might be blocked. Click 'Debug' for more details.".to_string());
+            }
+        }
+
         window.emit("progress", serde_json::json!({"type": "status", "message": format!("Image not found locally. Pulling {}...", image_tag)})).unwrap();
 
         // Use PTY for rich animated progress bars on all platforms
