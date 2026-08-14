@@ -6,6 +6,8 @@
 [![Built with Tauri](https://img.shields.io/badge/Built%20with-Tauri-24292e?logo=tauri)](https://tauri.app)
 [![Rust + TypeScript](https://img.shields.io/badge/Stack-Rust%20%2B%20TypeScript-ce3262?logo=rust)](src-tauri)
 
+**📹 [Watch the Demo Video](https://dl.dropbox.com/scl/fi/jj3ncr01vbetq12mzeded/allBrew.mp4?rlkey=qrcswsnxpblpo463rr7bpx7k4&st=bylsb3z4&dl=0)** – See BrewBoxes in action!
+
 ## Origin Story
 
 BrewBoxes was born out of necessity during my school years. Every time I'd install a new VM with my projects, someone would inevitably delete the `D:\` folder or empty the `C:\` drive, wiping away weeks of work. The traditional cycle of downloading an ISO image over school WiFi and waiting 2-3 hours for installation and configuration was unsustainable.
@@ -52,17 +54,14 @@ BrewBoxes is a lightweight desktop application that makes it effortless to launc
 
 ## Getting Started
 
-### Prerequisites
+### Quick Install
 
-- **Windows**: WSL2 or Podman Desktop
-- **macOS**: Docker Desktop or Podman
-- **Linux**: Podman or Docker installed and running
+**Choose your platform:**
+- **[Windows](INSTALL.md#windows)** - Native installer or WSL2 Native Engine
+- **[macOS](INSTALL.md#macos)** - DMG installer (Intel & Apple Silicon)
+- **[Linux](INSTALL.md#linux)** - AppImage or Debian package
 
-### Installation
-
-1. **Download** the latest release from [Releases](https://github.com/Dznar/BrewBoxes/releases)
-2. **Launch** the BrewBoxes application
-3. **Verify** your container engine is installed and running
+**Detailed instructions:** See [INSTALL.md](INSTALL.md)
 
 ### First Launch
 
@@ -106,8 +105,8 @@ For the best Windows experience, BrewBoxes can set up a lightweight **Native Eng
               │                  │
               ▼                  ▼
         ┌──────────────┐   ┌───────────────┐
-        │  Podman / Docker  │ Native Engine │
-        │  Container Engine │  (Alpine WSL2)│
+        │ Podman/Docker │ Native Engine   │
+        │ Container Eng │ (Alpine WSL2)   │
         └──────────────┘   └───────────────┘
               │                  │
               └──────────┬───────┘
@@ -182,6 +181,8 @@ For the best Windows experience, BrewBoxes can set up a lightweight **Native Eng
 - If still conflicted, close other applications using those ranges
 - Manually specify port overrides in advanced settings (future version)
 
+**More help?** See [INSTALL.md](INSTALL.md#troubleshooting)
+
 ## Development
 
 ### Tech Stack
@@ -215,13 +216,25 @@ BrewBoxes/
 │   ├── src/lib.rs        # Core container logic
 │   └── Cargo.toml        # Rust dependencies
 ├── package.json          # Node.js tooling config
-└── README.md            # This file
+├── README.md            # This file
+├── INSTALL.md           # Installation guide
+├── CONTRIBUTING.md      # Contributor guidelines
+└── LICENSE              # BSD-3-Clause
 ```
 
 ## Contributing
 
-Contributions are welcome! Areas for improvement:
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Development setup
+- Code style guidelines
+- Pull request process
+- Common contribution areas
 
+**Quick links:**
+- [Open Issues](https://github.com/Dznar/BrewBoxes/issues) - Bugs & feature requests
+- [Discussions](https://github.com/Dznar/BrewBoxes/discussions) - Ideas & questions
+
+**Ideas for improvement:**
 - [ ] Container image builder (custom distro + GUI combos)
 - [ ] Multi-monitor support in web interface
 - [ ] Recording/replay of container sessions
@@ -229,13 +242,11 @@ Contributions are welcome! Areas for improvement:
 - [ ] Container resource limits UI
 - [ ] Web UI theming options
 
-See [Issues](https://github.com/Dznar/BrewBoxes/issues) for open tasks.
-
 ## License
 
 BrewBoxes is licensed under the **BSD-3-Clause License**. This keeps the project open-source while avoiding the complexity and constraints of other licenses like Apache 2.0.
 
-See [LICENSE](LICENSE) file for details.
+See [LICENSE](LICENSE) for details.
 
 ---
 
@@ -248,6 +259,6 @@ See [LICENSE](LICENSE) file for details.
 
 ---
 
-**Questions?** Open an [Issue](https://github.com/Dznar/BrewBoxes/issues) on GitHub.
+**Questions?** Open an [Issue](https://github.com/Dznar/BrewBoxes/issues) or start a [Discussion](https://github.com/Dznar/BrewBoxes/discussions).
 
 **Want to support?** Star ⭐ this repo and share it with others!
