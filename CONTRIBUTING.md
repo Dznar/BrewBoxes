@@ -58,7 +58,7 @@ BrewBoxes/
 │   │   ├── main.rs             # Entry point
 │   │   └── lib.rs              # Core logic
 │   │       ├── launch_container()    # Container launch orchestration
-│   │       ├── setup_native_engine() # Windows native engine setup
+│   │       ├── setup_native_engine() # Windows native engine (WSL2)
 │   │       ├── detect_engine()       # Podman/Docker detection
 │   │       └── (PTY streaming functions)
 │   └── Cargo.toml
@@ -120,6 +120,40 @@ npm run tauri dev
 - Dependency updates
 - Error handling enhancements
 
+## Known Limitations & Future Improvements
+
+### 🪟 Windows Container Performance
+
+**The Problem:**
+On Windows, WSL2's filesystem I/O has inherent bottlenecks that slow down container image pulls significantly (often 2-3x slower than native hypervisor solutions). This was BrewBoxes's original pain point during development.
+
+**Current Solution:**
+The **Native Engine** (`src-tauri/src/lib.rs` lines ~301-405) is a lightweight container runtime built specifically to mitigate this:
+- Minimal Alpine Linux + Nerdctl running in WSL2
+- Bypasses some I/O overhead compared to full Docker/Podman in WSL2
+- One-time setup (~5-10 minutes) 
+
+**Why Recommended Today:**
+Modern Podman Desktop uses native Hyper-V (not WSL2), which achieves comparable performance without the extra setup burden.
+
+**Future Improvements:**
+Contributors interested in Windows optimization could explore:
+1. **Direct Hyper-V Integration** - Launch containers directly on Hyper-V without WSL2
+2. **Windows Container Support** - Use Windows-native container technology (Docker/nerdctl for Windows)
+3. **Performance Profiling** - Identify exact bottlenecks in the current Native Engine
+4. **Container Image Caching** - Improve layer caching strategies across pull operations
+5. **Parallel Pulls** - Download multiple image layers simultaneously
+
+**How to Help:**
+- Profile container pulls on Windows with/without Native Engine
+- Test Podman Desktop vs Docker Desktop vs Native Engine
+- Propose new container engine integrations
+- Benchmark I/O performance on different hardware configurations
+
+See [Issue #X](https://github.com/Dznar/BrewBoxes/issues) for ongoing discussion.
+
+---
+
 ## Pull Request Process
 
 1. **Before Submitting:**
@@ -164,9 +198,9 @@ npm run tauri dev
 
 ### Cross-Platform Testing
 Due to platform differences, test on:
-- **Windows**: Native Engine setup, WSL2 integration, path handling
-- **macOS**: Podman/Docker integration, app signing
-- **Linux**: PTY rendering, engine auto-detection
+- **Windows**: Engine detection (Podman/Docker), container launches, port allocation
+- **macOS**: Podman/Docker integration, app signing, both Intel & Apple Silicon
+- **Linux**: PTY rendering, engine auto-detection, rootless mode, permission handling
 
 ## Code Style
 
